@@ -195,8 +195,21 @@ tmp/
 
 # Backups automáticos
 *.backup
+*.backup_*
 *.bak
 *~
+
+# Backups con timestamp embebido (ej: archivo.py.backup_20251216_105053)
+*.py.backup_*
+*.html.backup_*
+*.json.backup_*
+*.js.backup_*
+
+# Carpetas de test temporales en raíz (los tests permanentes van en /tests)
+test_diary/
+test_memory/
+test_integration_memory/
+test_research/
 
 
 # ===== SISTEMA OPERATIVO =====
