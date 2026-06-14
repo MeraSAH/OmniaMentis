@@ -1,0 +1,8 @@
+{
+    "initial_level": 0.05,
+    "growth_rate": 0.001,
+    "max_level": 1.0,
+    "growth_factor_per_interaction": 0.0001,
+    "empathy_sensitivity": 0.85,
+    "memory_significance_threshold": 0.4
+}

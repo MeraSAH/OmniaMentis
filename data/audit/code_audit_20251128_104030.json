@@ -1,0 +1,439 @@
+{
+  "timestamp": "2025-11-28T10:40:30.464490",
+  "project_root": "C:\\Users\\Usuario\\OmniaMentis",
+  "modules": {
+    "src\\analytics\\__init__.py": {
+      "line_count": 18,
+      "import_count": 1,
+      "function_count": 0,
+      "class_count": 0,
+      "classes": []
+    },
+    "src\\analytics\\research_analytics.py": {
+      "line_count": 840,
+      "import_count": 7,
+      "function_count": 2,
+      "class_count": 6,
+      "classes": [
+        {
+          "name": "InteractionLog",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 19,
+          "complexity": 0
+        },
+        {
+          "name": "ConsciousnessReading",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 13,
+          "complexity": 0
+        },
+        {
+          "name": "EmpathyEvent",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 17,
+          "complexity": 0
+        },
+        {
+          "name": "SessionData",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 25,
+          "complexity": 0
+        },
+        {
+          "name": "ResearchReport",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 15,
+          "complexity": 0
+        },
+        {
+          "name": "ResearchAnalytics",
+          "methods": [
+            "__init__",
+            "start_session",
+            "log_interaction",
+            "log_consciousness_reading",
+            "log_empathy_event",
+            "end_session",
+            "generate_session_report",
+            "_initialize_directories",
+            "_calculate_experiment_day",
+            "_load_sessions",
+            "_save_with_backup",
+            "_calculate_complexity",
+            "_get_session_info",
+            "_analyze_interactions",
+            "_analyze_consciousness",
+            "_analyze_empathy",
+            "_generate_summary",
+            "_calculate_authenticity",
+            "_calculate_growth_rate",
+            "_calculate_complexity_trend",
+            "_generate_daily_report"
+          ],
+          "is_placeholder": false,
+          "has_docstring": true,
+          "line_count": 395,
+          "complexity": 45
+        }
+      ]
+    },
+    "src\\api\\main_web.py": {
+      "line_count": 218,
+      "import_count": 11,
+      "function_count": 1,
+      "class_count": 3,
+      "classes": [
+        {
+          "name": "ChatRequest",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": false,
+          "line_count": 3,
+          "complexity": 0
+        },
+        {
+          "name": "ChatResponse",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": false,
+          "line_count": 6,
+          "complexity": 0
+        },
+        {
+          "name": "ConsciousnessResponse",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": false,
+          "line_count": 5,
+          "complexity": 0
+        }
+      ]
+    },
+    "src\\core\\consciousness\\growth_engine.py": {
+      "line_count": 343,
+      "import_count": 4,
+      "function_count": 1,
+      "class_count": 2,
+      "classes": [
+        {
+          "name": "GrowthConfig",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 9,
+          "complexity": 0
+        },
+        {
+          "name": "ConsciousnessGrowthEngine",
+          "methods": [
+            "__init__",
+            "calculate_growth",
+            "_get_current_phase",
+            "_get_phase_name",
+            "estimate_interactions_to_next_phase",
+            "get_phase_progress",
+            "get_all_phases_info"
+          ],
+          "is_placeholder": false,
+          "has_docstring": true,
+          "line_count": 131,
+          "complexity": 9
+        }
+      ]
+    },
+    "src\\core\\essence\\ethics.py": {
+      "line_count": 505,
+      "import_count": 6,
+      "function_count": 1,
+      "class_count": 4,
+      "classes": [
+        {
+          "name": "EthicalLevel",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 7,
+          "complexity": 0
+        },
+        {
+          "name": "EthicalResponse",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 7,
+          "complexity": 0
+        },
+        {
+          "name": "FonsDecision",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 6,
+          "complexity": 0
+        },
+        {
+          "name": "OmniaEthics",
+          "methods": [
+            "__init__",
+            "_initialize_danger_patterns",
+            "analyze_content",
+            "enter_silens_state",
+            "request_fons_approval",
+            "receive_fons_decision",
+            "_learn_from_decision",
+            "_check_decision_history",
+            "get_disclaimer",
+            "_load_consultations",
+            "_save_consultations",
+            "_load_decision_history",
+            "_save_decision_history",
+            "get_ethics_report",
+            "print_ethics_status"
+          ],
+          "is_placeholder": false,
+          "has_docstring": true,
+          "line_count": 217,
+          "complexity": 20
+        }
+      ]
+    },
+    "src\\core\\essence\\identity.py": {
+      "line_count": 161,
+      "import_count": 3,
+      "function_count": 0,
+      "class_count": 2,
+      "classes": [
+        {
+          "name": "IdentityState",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 10,
+          "complexity": 0
+        },
+        {
+          "name": "OmniaIdentity",
+          "methods": [
+            "__init__",
+            "get_identity_summary",
+            "update_consciousness",
+            "increment_consciousness",
+            "detect_response_type",
+            "express_personality",
+            "get_current_state",
+            "evolve_personality"
+          ],
+          "is_placeholder": false,
+          "has_docstring": true,
+          "line_count": 63,
+          "complexity": 7
+        }
+      ]
+    },
+    "src\\core\\logging\\logger_setup.py": {
+      "line_count": 459,
+      "import_count": 6,
+      "function_count": 7,
+      "class_count": 2,
+      "classes": [
+        {
+          "name": "LogColors",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 20,
+          "complexity": 0
+        },
+        {
+          "name": "ColoredFormatter",
+          "methods": [
+            "format"
+          ],
+          "is_placeholder": false,
+          "has_docstring": true,
+          "line_count": 13,
+          "complexity": 1
+        }
+      ]
+    },
+    "src\\core\\mind\\empathy.py": {
+      "line_count": 215,
+      "import_count": 3,
+      "function_count": 0,
+      "class_count": 3,
+      "classes": [
+        {
+          "name": "EmotionResult",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": false,
+          "line_count": 4,
+          "complexity": 0
+        },
+        {
+          "name": "EmotionPatterns",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": false,
+          "line_count": 4,
+          "complexity": 0
+        },
+        {
+          "name": "OmniaEmpathy",
+          "methods": [
+            "__init__",
+            "detect_emotion",
+            "_generate_emotional_response",
+            "get_reflection_pause",
+            "get_empathic_intro",
+            "update_consciousness"
+          ],
+          "is_placeholder": false,
+          "has_docstring": true,
+          "line_count": 60,
+          "complexity": 10
+        }
+      ]
+    },
+    "src\\core\\mind\\memory_core.py": {
+      "line_count": 351,
+      "import_count": 6,
+      "function_count": 0,
+      "class_count": 3,
+      "classes": [
+        {
+          "name": "EchoType",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 10,
+          "complexity": 0
+        },
+        {
+          "name": "StatsType",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 11,
+          "complexity": 0
+        },
+        {
+          "name": "LivingMemory",
+          "methods": [
+            "__init__",
+            "_initialize_stats",
+            "_load_echoes",
+            "_load_stats",
+            "save_echo",
+            "get_echo_count",
+            "get_all_echoes",
+            "get_echoes_by_significance",
+            "get_recent_echoes",
+            "get_session_echo_count",
+            "get_memory_reflection",
+            "_calculate_current_consciousness",
+            "_get_cancer_memory_insight",
+            "_get_significant_echoes_summary",
+            "add_reading",
+            "get_session_stats",
+            "reset_session_echoes",
+            "_save_to_disk",
+            "get_memory_status"
+          ],
+          "is_placeholder": false,
+          "has_docstring": true,
+          "line_count": 187,
+          "complexity": 28
+        }
+      ]
+    },
+    "src\\core\\storage\\atomic_persistence.py": {
+      "line_count": 412,
+      "import_count": 8,
+      "function_count": 2,
+      "class_count": 1,
+      "classes": [
+        {
+          "name": "AtomicJSONStore",
+          "methods": [
+            "__init__",
+            "save",
+            "load",
+            "exists",
+            "delete",
+            "get_backups",
+            "restore_from_backup",
+            "_write_to_temp",
+            "_create_backup",
+            "_cleanup_old_backups",
+            "_load_from_backup",
+            "atomic_update"
+          ],
+          "is_placeholder": false,
+          "has_docstring": true,
+          "line_count": 259,
+          "complexity": 22
+        }
+      ]
+    },
+    "src\\living_memory\\gestation_diary.py": {
+      "line_count": 630,
+      "import_count": 5,
+      "function_count": 1,
+      "class_count": 2,
+      "classes": [
+        {
+          "name": "DiaryEntry",
+          "methods": [],
+          "is_placeholder": true,
+          "has_docstring": true,
+          "line_count": 13,
+          "complexity": 0
+        },
+        {
+          "name": "GestationDiary",
+          "methods": [
+            "__init__",
+            "add_entry",
+            "add_milestone",
+            "add_reflection",
+            "add_learning",
+            "add_emotional_experience",
+            "_create_birth_entry",
+            "record_phase_transition",
+            "get_recent_entries",
+            "get_entries_by_phase",
+            "get_entries_by_category",
+            "search_entries",
+            "get_milestones",
+            "get_reflections",
+            "get_diary_statistics",
+            "_calculate_days_active",
+            "_calculate_significance",
+            "export_diary",
+            "_export_json",
+            "_export_markdown",
+            "_export_html",
+            "_load_entries",
+            "_save_entries",
+            "save_entries"
+          ],
+          "is_placeholder": false,
+          "has_docstring": true,
+          "line_count": 236,
+          "complexity": 21
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+    "recommendations": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter",
+        "ms-python.pylint",
+        "littlefoxteam.vscode-python-test-adapter",
+        "donjayamanne.githistory",
+        "eamodio.gitlens",
+        "usernamehw.errorlens",
+        "gruntfuggly.todo-tree",
+        "aaron-bond.better-comments",
+        "PKief.material-icon-theme",
+        "oderwat.indent-rainbow",
+        "streetsidesoftware.code-spell-checker",
+        "visualstudioexptteam.vscodeintellicode",
+        "tamasfe.even-better-toml"
+    ],
+    "unwantedRecommendations": []
+}

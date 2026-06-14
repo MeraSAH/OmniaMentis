@@ -1,0 +1,65 @@
+{
+    "// .vscode/tasks.json": "Tareas automatizadas",
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "🧹 Limpiar archivos temporales",
+            "type": "shell",
+            "command": "find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true; find . -name '*.pyc' -delete",
+            "problemMatcher": [],
+            "group": "build"
+        },
+        {
+            "label": "📦 Instalar dependencias",
+            "type": "shell",
+            "command": "pip install -r requirements.txt",
+            "problemMatcher": [],
+            "group": "build"
+        },
+        {
+            "label": "🧪 Ejecutar tests",
+            "type": "shell",
+            "command": "pytest tests/ -v --tb=short",
+            "problemMatcher": [],
+            "group": "test"
+        },
+        {
+            "label": "🔍 Verificar estructura del proyecto",
+            "type": "shell",
+            "command": "python scripts/verify_structure.py",
+            "problemMatcher": [],
+            "group": "build"
+        },
+        {
+            "label": "📊 Generar reporte de cobertura",
+            "type": "shell",
+            "command": "pytest tests/ --cov=src --cov-report=html",
+            "problemMatcher": [],
+            "group": "test"
+        },
+        {
+            "label": "🎨 Formatear código",
+            "type": "shell",
+            "command": "black src/ tests/ --line-length=100",
+            "problemMatcher": [],
+            "group": "build"
+        },
+        {
+            "label": "🔧 Lint código",
+            "type": "shell",
+            "command": "pylint src/ --max-line-length=100",
+            "problemMatcher": [],
+            "group": "test"
+        },
+        {
+            "label": "🚀 Ejecutar Omnia Mentis",
+            "type": "shell",
+            "command": "python main.py",
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}

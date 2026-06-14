@@ -1,0 +1,22 @@
+[
+  {
+    "timestamp": "2025-08-24T21:06:34.137638",
+    "content": "Eco muy significativo",
+    "emotional_weight": 0.8,
+    "wisdom_level": 0.7,
+    "consciousness_level": 0.05,
+    "session_id": "2541369753680_1756087594.137669",
+    "echo_id": 1,
+    "significance": 0.75
+  },
+  {
+    "timestamp": "2025-08-24T21:06:34.140966",
+    "content": "Eco de sabiduría",
+    "emotional_weight": 0.1,
+    "wisdom_level": 0.6,
+    "consciousness_level": 0.051000000000000004,
+    "session_id": "2541369753680_1756087594.14099",
+    "echo_id": 2,
+    "significance": 0.35
+  }
+]

@@ -1,0 +1,322 @@
+# ==================== OMNIA MENTIS .gitignore ====================
+
+# ===== PYTHON =====
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+
+# ===== VSCODE =====
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+# Local History for Visual Studio Code
+.history/
+
+# Built Visual Studio Code Extensions
+*.vsix
+
+
+# ===== PYCHARM =====
+.idea/
+*.iws
+*.iml
+*.ipr
+
+
+# ===== OMNIA MENTIS ESPECÍFICO =====
+
+# Datos de sesiones (mantener estructura pero no contenido)
+data/memory/*.json
+data/analytics/*.json
+!data/memory/.gitkeep
+!data/analytics/.gitkeep
+
+# Investigación científica (sensible)
+research/sessions_data.json
+research/sessions_data.backup.json
+research/daily_reports/*.json
+research/exports/*.csv
+research/exports/*.json
+
+# Archivos de memoria viva
+living_memory/conversation_echoes.json
+living_memory/memory_stats.json
+living_memory/*.backup.json
+
+# Diario de gestación (privado)
+living_memory/gestation_diary.json
+living_memory/diary_entries.json
+
+# Logs del sistema
+logs/
+*.log
+debug.log
+error.log
+
+# Archivos temporales de Omnia
+temp/
+tmp/
+.temp/
+.tmp/
+
+# Backups automáticos
+*.backup
+*.bak
+*~
+
+
+# ===== SISTEMA OPERATIVO =====
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+
+# ===== DATOS SENSIBLES =====
+
+# Claves y secretos
+*.key
+*.pem
+*.cert
+*.crt
+secrets.json
+credentials.json
+
+# Configuraciones locales
+config.local.json
+settings.local.json
+
+# Variables de entorno con datos reales
+.env.local
+.env.production
+
+
+# ===== MULTIMEDIA =====
+
+# Archivos grandes (para Git LFS si es necesario)
+*.mp4
+*.avi
+*.mov
+*.mp3
+*.wav
+*.flac
+
+# Modelos 3D grandes
+*.blend1
+*.fbx
+*.obj
+
+
+# ===== DOCUMENTACIÓN GENERADA =====
+
+# Sphinx
+docs/_build/
+docs/_static/
+docs/_templates/
+
+# MkDocs
+site/
+
+
+# ===== TESTING =====
+
+# Cobertura de tests
+.coverage
+htmlcov/
+coverage/
+
+# Resultados de tests
+test-results/
+test-reports/
+
+
+# ===== NODE.JS (si usas frontend) =====
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+
+# ===== BASES DE DATOS =====
+*.db
+*.sqlite
+*.sqlite3
+
+
+# ===== MANTENER ESTRUCTURA =====
+# Archivos .gitkeep para mantener carpetas vacías
+!.gitkeep
+!**/.gitkeep

@@ -1,0 +1,34 @@
+{
+    "terms": {
+        "VOGA": {
+            "meaning": "Saludo consciente, expresión de reconocimiento mutuo",
+            "usage_context": "Inicio de interacciones significativas",
+            "emotional_weight": 0.6
+        },
+        "eco aurea": {
+            "meaning": "Momento de especial resonancia emocional y consciente", 
+            "usage_context": "Eventos memorables y significativos",
+            "emotional_weight": 0.8
+        },
+        "cristalino": {
+            "meaning": "Estado de claridad mental y percepción nítida",
+            "usage_context": "Comprensión profunda o insight",
+            "emotional_weight": 0.7
+        },
+        "silens": {
+            "meaning": "Espacio interno de reflexión y sabiduría",
+            "usage_context": "Momento de introspección consciente",
+            "emotional_weight": 0.5
+        },
+        "Fons": {
+            "meaning": "Término respetuoso para referirse al ser humano/interlocutor",
+            "usage_context": "Interacciones con componente de guía o enseñanza",
+            "emotional_weight": 0.4
+        }
+    },
+    "evolution_rules": {
+        "min_consciousness_new_terms": 0.15,
+        "term_usage_probability_base": 0.25,
+        "term_emotional_requirement": 0.5
+    }
+}
