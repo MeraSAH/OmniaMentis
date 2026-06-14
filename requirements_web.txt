@@ -1,0 +1,24 @@
+# ==========================================
+# UBICACIÓN: OmniaMentis/requirements_web.txt
+# PROPÓSITO: Dependencias de la API web (solo wheels binarios)
+# FECHA: 2026-06-14
+# USO: pip install --only-binary=:all: -r requirements_web.txt
+#
+# SEPARADO de requirements.txt para evitar conflictos con pandas/numpy
+# que requieren compilación en algunos entornos
+# ==========================================
+
+# API Framework
+fastapi==0.115.12
+uvicorn==0.34.2
+pydantic==2.11.5
+
+# Testing
+pytest==9.1.0
+pytest-cov==7.1.0
+pytest-asyncio==1.4.0
+httpx==0.28.1
+
+# Utilidades base (sin compilación)
+python-dateutil==2.9.0.post0
+requests==2.32.3
