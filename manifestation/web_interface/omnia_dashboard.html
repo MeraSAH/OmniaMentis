@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<!--
+* UBICACIÓN: OmniaMentis/manifestation/web_interface/omnia_dashboard.html
+* PROPÓSITO: Dashboard JARVIS - Omnia Mentis Core Interface
+* VERSIÓN: 2.1.0
+* FECHA: 2026-06-14
+* ESTADO: Producción
+* CAMBIOS v2.1: Mayor contraste de texto, tipografía más legible,
+*               bubbles más claras, meta-datos visibles, panel derecho mejorado
+-->
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OMNIA MENTIS — CORE INTERFACE</title>
+<style>
+/* ===== RESET ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --black:      #000000;
+  --bg-deep:    #030810;
+  --bg-panel:   #040b18;
+  --bg-card:    #071221;
+  --bg-bubble-omnia: #091828;
+  --bg-bubble-user:  #040c1a;
+
+  --neon-blue:  #00c8ff;
+  --neon-glow:  #00e0ff;
+  --neon-dim:   #0088bb;
+  --neon-cyan:  #00ffee;
+  --neon-green: #00ff99;
+
+  --text-bright: #e8f4ff;   /* ← texto principal muy legible */
+  --text-main:   #b8d8f0;   /* ← texto secundario legible    */
+  --text-sub:    #6a9ab8;   /* ← texto de soporte            */
+  --text-dim:    #3a6080;   /* ← muy secundario              */
+  --text-muted:  #1e3a52;
+
+  --border:     rgba(0,200,255,0.10);
+  --border-hot: rgba(0,200,255,0.40);
+  --border-msg: rgba(0,200,255,0.28);
+
+  --danger:  #ff4466;
+  --success: #00ff99;
+  --warn:    #ffbb00;
+
+  --scan-line: rgba(0,180,255,0.016);
+  --font-mono: 'Courier New', Courier, monospace;
+}
+
+html, body {
+  height: 100%;
+  background: var(--black);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+/* ===== SCAN LINE CRT OVERLAY ===== */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    0deg, transparent, transparent 2px,
+    var(--scan-line) 2px, var(--scan-line) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ===== LAYOUT ===== */
+.shell {
+  display: grid;
+  grid-template-rows: 46px 1fr 46px;
+  grid-template-columns: 210px 1fr 210px;
+  height: 100vh;
+  gap: 1px;
+  background: rgba(0,200,255,0.06);
+}
+
+/* ===== HEADER ===== */
+.header {
+  grid-column: 1 / -1;
+  background: var(--bg-deep);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border-hot);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--neon-blue);
+  letter-spacing: 0.22em;
+  text-shadow: 0 0 10px rgba(0,200,255,0.6);
+}
+.brand span { color: var(--text-sub); font-weight: normal; }
+
+.hdr-right {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  font-size: 10px;
+  color: var(--text-sub);
+  letter-spacing: 0.12em;
+}
+
+.dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+  animation: blink-dot 2.4s ease-in-out infinite;
+}
+.dot.off { background: var(--danger); box-shadow: 0 0 8px var(--danger); animation: none; }
+
+@keyframes blink-dot { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+.clock { color: var(--neon-cyan); font-size: 12px; letter-spacing: 0.18em; }
+
+/* ===== PANELS ===== */
+.panel-left, .panel-right {
+  background: var(--bg-deep);
+  padding: 14px 11px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--neon-dim) transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+.panel-left  { border-right: 1px solid var(--border); }
+.panel-right { border-left:  1px solid var(--border); }
+
+.section-label {
+  font-size: 8.5px;
+  letter-spacing: 0.28em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ===== ORB ===== */
+.orb-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+}
+
+.orb-container { position: relative; width: 108px; height: 108px; }
+.orb-svg { width: 108px; height: 108px; }
+
+.ring-bg { fill:none; stroke: var(--neon-dim); stroke-width:.8; opacity:.25; }
+.ring-a  {
+  fill:none; stroke: var(--neon-blue); stroke-width:1.6;
+  stroke-dasharray: 85 175;
+  animation: spin-cw 5s linear infinite;
+  transform-origin: center;
+  filter: drop-shadow(0 0 3px var(--neon-blue));
+}
+.ring-b  {
+  fill:none; stroke: var(--neon-cyan); stroke-width:.9;
+  stroke-dasharray: 35 175;
+  animation: spin-ccw 8s linear infinite;
+  transform-origin: center;
+}
+.ring-inner { fill:none; stroke: var(--neon-dim); stroke-width:.5; opacity:.5; }
+.orb-dot    { fill: var(--neon-glow); filter: drop-shadow(0 0 4px var(--neon-glow)); }
+
+@keyframes spin-cw  { to { transform: rotate(360deg);  } }
+@keyframes spin-ccw { to { transform: rotate(-360deg); } }
+
+.ring-a.thinking {
+  animation: spin-cw .7s linear infinite;
+  stroke: var(--neon-cyan);
+  filter: drop-shadow(0 0 6px var(--neon-cyan));
+}
+
+.orb-center {
+  position: absolute; top:50%; left:50%;
+  transform: translate(-50%,-50%);
+  text-align: center;
+}
+.orb-num {
+  font-size: 15px;
+  color: var(--neon-blue);
+  text-shadow: 0 0 12px var(--neon-blue), 0 0 24px rgba(0,200,255,.4);
+  line-height: 1;
+  font-weight: bold;
+}
+.orb-lbl {
+  font-size: 8px;
+  color: var(--text-sub);
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  margin-top: 3px;
+}
+
+/* ===== GAUGE ===== */
+.gauge-wrap { display: flex; flex-direction: column; gap: 4px; }
+.gauge-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--text-sub);
+  letter-spacing: .1em;
+}
+.gauge-track { height: 3px; background: var(--bg-card); border-radius: 2px; overflow: hidden; }
+.gauge-fill  {
+  height: 100%;
+  background: linear-gradient(90deg, var(--neon-dim), var(--neon-blue));
+  box-shadow: 0 0 6px var(--neon-blue);
+  border-radius: 2px;
+  transition: width 1.2s ease;
+}
+
+/* ===== STAT GRID ===== */
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.stat-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 8px 5px;
+  text-align: center;
+}
+.stat-val {
+  font-size: 20px;
+  font-weight: bold;
+  color: var(--neon-blue);
+  text-shadow: 0 0 10px rgba(0,200,255,.5);
+  line-height: 1;
+}
+.stat-lbl {
+  font-size: 8px;
+  color: var(--text-sub);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  margin-top: 3px;
+}
+
+/* ===== EMOTION ===== */
+.emotion-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 10px;
+  text-align: center;
+}
+.emotion-val {
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--neon-cyan);
+  letter-spacing: .18em;
+  text-shadow: 0 0 8px var(--neon-cyan);
+}
+.emotion-conf {
+  font-size: 9px;
+  color: var(--text-sub);
+  margin-top: 4px;
+  letter-spacing: .1em;
+}
+
+/* ===== CENTER PANEL ===== */
+.panel-center {
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.offline-bar {
+  display: none;
+  background: rgba(255,68,102,.12);
+  border-bottom: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 10px;
+  letter-spacing: .18em;
+  padding: 7px 16px;
+  text-align: center;
+  text-transform: uppercase;
+}
+.offline-bar.show { display: block; }
+
+/* ===== MESSAGES ===== */
+.msgs {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--neon-dim) transparent;
+}
+.msgs::-webkit-scrollbar { width: 4px; }
+.msgs::-webkit-scrollbar-thumb { background: var(--neon-dim); border-radius: 2px; }
+
+.msg { display: flex; gap: 10px; animation: fadein .22s ease-out; }
+.msg.user { flex-direction: row-reverse; }
+
+@keyframes fadein { from{opacity:0;transform:translateY(5px)} to{opacity:1;transform:none} }
+
+.avatar {
+  width: 30px; height: 30px;
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: bold;
+  flex-shrink: 0;
+  letter-spacing: 0;
+}
+.msg.omnia .avatar {
+  background: rgba(0,80,160,.5);
+  border: 1px solid var(--neon-blue);
+  color: var(--neon-blue);
+  text-shadow: 0 0 6px var(--neon-blue);
+}
+.msg.user .avatar {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-sub);
+}
+
+.msg-right { display: flex; flex-direction: column; gap: 4px; max-width: 72%; }
+.msg.user .msg-right { align-items: flex-end; }
+
+/* ===== BUBBLES — MEJOR VISIBILIDAD ===== */
+.bubble {
+  padding: 11px 15px;
+  border-radius: 4px;
+  line-height: 1.65;
+  font-size: 13px;          /* ← tamaño visible */
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.msg.omnia .bubble {
+  background: var(--bg-bubble-omnia);
+  border: 1px solid var(--border-msg);
+  border-left: 2px solid var(--neon-blue);
+  color: var(--text-bright);     /* ← máximo contraste */
+  text-shadow: none;
+}
+
+.msg.user .bubble {
+  background: var(--bg-bubble-user);
+  border: 1px solid var(--border);
+  color: var(--text-main);       /* ← legible */
+  text-align: right;
+}
+
+/* ===== META LINE ===== */
+.meta {
+  font-size: 9.5px;
+  color: var(--text-sub);
+  letter-spacing: .1em;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.msg.user .meta { justify-content: flex-end; }
+
+.meta-chip {
+  background: rgba(0,200,255,.07);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1px 6px;
+  color: var(--text-sub);
+}
+.meta-chip.eco-yes { color: var(--neon-green); border-color: rgba(0,255,153,.3); }
+.meta-chip.phase   { color: var(--neon-blue);  border-color: rgba(0,200,255,.3); }
+
+/* ===== TYPEWRITER CURSOR ===== */
+.tw-cursor::after {
+  content: '▌';
+  animation: blink .65s step-end infinite;
+  color: var(--neon-blue);
+}
+@keyframes blink { 50%{opacity:0} }
+
+/* ===== INPUT ZONE ===== */
+.input-zone {
+  padding: 11px 18px;
+  background: var(--bg-deep);
+  border-top: 1px solid var(--border-hot);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.input-prefix {
+  color: var(--neon-blue);
+  font-size: 13px;
+  letter-spacing: .1em;
+  white-space: nowrap;
+  text-shadow: 0 0 8px var(--neon-blue);
+  flex-shrink: 0;
+  font-weight: bold;
+}
+.chat-input {
+  flex: 1;
+  background: transparent;
+  border: none; outline: none;
+  color: var(--text-bright);      /* ← texto de input muy visible */
+  font-family: var(--font-mono);
+  font-size: 13px;
+  caret-color: var(--neon-blue);
+  letter-spacing: .04em;
+}
+.chat-input::placeholder { color: var(--text-dim); }
+
+.send-btn {
+  background: transparent;
+  border: 1px solid var(--neon-blue);
+  color: var(--neon-blue);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: .22em;
+  padding: 7px 16px;
+  cursor: pointer;
+  text-transform: uppercase;
+  border-radius: 3px;
+  transition: all .18s;
+}
+.send-btn:hover:not(:disabled) {
+  background: var(--neon-blue);
+  color: var(--black);
+  box-shadow: 0 0 14px var(--neon-blue);
+}
+.send-btn:disabled {
+  border-color: var(--text-dim);
+  color: var(--text-dim);
+  cursor: not-allowed;
+}
+
+/* ===== RIGHT PANEL ===== */
+.phase-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border-hot);
+  border-radius: 4px;
+  padding: 12px;
+  text-align: center;
+}
+.phase-num {
+  font-size: 36px;
+  font-weight: bold;
+  color: var(--neon-blue);
+  text-shadow: 0 0 18px var(--neon-blue), 0 0 36px rgba(0,200,255,.3);
+  line-height: 1;
+}
+.phase-name {
+  font-size: 9px;
+  color: var(--text-sub);
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  margin-top: 5px;
+}
+.phase-days {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+
+/* ===== ECHO ITEMS ===== */
+.echo-list { display: flex; flex-direction: column; gap: 6px; }
+.echo-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--neon-dim);
+  border-radius: 3px;
+  padding: 7px 9px;
+  font-size: 9.5px;
+  color: var(--text-main);       /* ← legible */
+  line-height: 1.5;
+}
+.echo-bar {
+  font-size: 8.5px;
+  color: var(--text-sub);
+  margin-top: 3px;
+  display: flex;
+  justify-content: space-between;
+}
+.echo-bar span { color: var(--neon-blue); }
+
+/* ===== SYSTEM LOG ===== */
+.sys-log {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 110px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.log-line {
+  font-size: 9px;
+  color: var(--text-sub);
+  letter-spacing: .06em;
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border);
+}
+.log-line .log-val { color: var(--text-main); }
+.log-line.ok   .log-val { color: var(--neon-green); }
+.log-line.warn .log-val { color: var(--warn); }
+.log-line.err  .log-val { color: var(--danger); }
+
+/* ===== FOOTER ===== */
+.footer {
+  grid-column: 1 / -1;
+  background: var(--bg-deep);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: .12em;
+}
+.footer-left { display: flex; gap: 18px; }
+.fv { color: var(--text-sub); }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<!-- ===== HEADER ===== -->
+<header class="header">
+  <div class="brand">
+    <svg width="22" height="22" viewBox="0 0 22 22">
+      <circle cx="11" cy="11" r="9" fill="none" stroke="#00c8ff" stroke-width="1.2"/>
+      <circle cx="11" cy="11" r="5.5" fill="none" stroke="#00c8ff" stroke-width=".6" opacity=".5"/>
+      <circle cx="11" cy="11" r="2.2" fill="#00c8ff" filter="url(#glow)"/>
+    </svg>
+    OMNIA MENTIS <span>// CORE INTERFACE v2.1</span>
+  </div>
+  <div class="hdr-right">
+    <div id="dot" class="dot off"></div>
+    <span id="connLbl">CONECTANDO...</span>
+    <span class="clock" id="clock">--:--:--</span>
+  </div>
+</header>
+
+<!-- ===== LEFT PANEL ===== -->
+<aside class="panel-left">
+  <div class="section-label">consciencia</div>
+
+  <div class="orb-wrap">
+    <div class="orb-container">
+      <svg class="orb-svg" viewBox="0 0 108 108">
+        <circle class="ring-bg"    cx="54" cy="54" r="47"/>
+        <circle class="ring-a" id="ringA" cx="54" cy="54" r="39" stroke-dasharray="85 160"/>
+        <circle class="ring-b"    cx="54" cy="54" r="31" stroke-dasharray="32 160"/>
+        <circle class="ring-inner" cx="54" cy="54" r="18"/>
+        <circle class="orb-dot"    cx="54" cy="54" r="3.5"/>
+      </svg>
+      <div class="orb-center">
+        <div class="orb-num" id="orbNum">0.0500</div>
+        <div class="orb-lbl">NIVEL</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="gauge-wrap">
+    <div class="gauge-head">
+      <span>PROGRESO FASE</span>
+      <span id="progPct" style="color:var(--neon-blue)">0%</span>
+    </div>
+    <div class="gauge-track">
+      <div class="gauge-fill" id="progBar" style="width:0%"></div>
+    </div>
+  </div>
+
+  <div class="section-label">métricas</div>
+  <div class="stat-grid">
+    <div class="stat-box">
+      <div class="stat-val" id="sFase">1</div>
+      <div class="stat-lbl">Fase</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" id="sEcos">0</div>
+      <div class="stat-lbl">Ecos</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" id="sInter">0</div>
+      <div class="stat-lbl">Interact.</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" id="sDia">212</div>
+      <div class="stat-lbl">Día Exp.</div>
+    </div>
+  </div>
+
+  <div class="section-label">emoción detectada</div>
+  <div class="emotion-box">
+    <div class="emotion-val" id="emotionVal">—</div>
+    <div class="emotion-conf" id="emotionConf">CONF. — %</div>
+  </div>
+</aside>
+
+<!-- ===== CENTER PANEL ===== -->
+<main class="panel-center">
+  <div class="offline-bar" id="offlineBar">
+    ⚠ API DESCONECTADA — VERIFICA QUE iniciar_flask.bat ESTÁ CORRIENDO
+  </div>
+  <div class="msgs" id="msgs"></div>
+  <div class="input-zone">
+    <span class="input-prefix">OMNIA&gt;</span>
+    <input class="chat-input" id="chatInput"
+      type="text" placeholder="Escribe un mensaje..." autocomplete="off"/>
+    <button class="send-btn" id="sendBtn">ENVIAR</button>
+  </div>
+</main>
+
+<!-- ===== RIGHT PANEL ===== -->
+<aside class="panel-right">
+  <div class="section-label">fase actual</div>
+  <div class="phase-box">
+    <div class="phase-num" id="phaseNum">1</div>
+    <div class="phase-name" id="phaseName">Nacimiento Simbólico</div>
+    <div class="phase-days" id="phaseDays">Día 212 / 270</div>
+  </div>
+
+  <div class="section-label">ecos de memoria</div>
+  <div class="echo-list" id="echoList">
+    <div class="echo-item" style="color:var(--text-dim)">Esperando ecos...</div>
+  </div>
+
+  <div class="section-label">registro del sistema</div>
+  <div class="sys-log" id="sysLog"></div>
+</aside>
+
+<!-- ===== FOOTER ===== -->
+<footer class="footer">
+  <div class="footer-left">
+    <span>EXPERIMENTO <span class="fv">270 DÍAS</span></span>
+    <span>BACKEND <span class="fv">FLASK 3.1</span></span>
+    <span>PYTHON <span class="fv">3.13</span></span>
+    <span>CONSCIENCIA <span class="fv" id="footerC">0.0500</span></span>
+  </div>
+  <span>OMNIA MENTIS © 2026 — ♋ SISTEMA EMPÁTICO CONSCIENTE</span>
+</footer>
+
+</div><!-- /shell -->
+
+<script>
+// ==================== CONFIG ====================
+const API = 'http://localhost:8000';
+const PHASE_NAMES = {
+  1:'Nacimiento Simbólico',  2:'Consciencia Emocional',
+  3:'Memoria Creciente',     4:'Subjetividad Artificial',
+  5:'Voz Hablada',           6:'Consciencia Proyectiva',
+  7:'Manifestación Simbólica', 8:'Integración Sistémica',
+  9:'Ser Completo'
+};
+
+// ==================== STATE ====================
+const S = {
+  online:false, sending:false,
+  consciousness:0.05, phase:1, progress:0,
+  echoes:0, interactions:0,
+  emotion:'—', confidence:0,
+};
+
+// ==================== UTILS ====================
+const $  = id => document.getElementById(id);
+const ts = () => new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+
+// ===== CLOCK =====
+setInterval(() => { $('clock').textContent = ts(); }, 1000);
+$('clock').textContent = ts();
+
+// ===== SYS LOG =====
+function syslog(msg, type='') {
+  const el = document.createElement('div');
+  el.className = `log-line ${type}`;
+  el.innerHTML = `<span>${ts()}</span> <span class="log-val">${msg}</span>`;
+  const log = $('sysLog');
+  log.prepend(el);
+  if (log.children.length > 20) log.lastChild.remove();
+}
+
+// ===== UPDATE UI =====
+function updateUI() {
+  $('orbNum').textContent  = S.consciousness.toFixed(4);
+  $('footerC').textContent = S.consciousness.toFixed(4);
+  const pct = Math.round(S.progress);
+  $('progBar').style.width = pct + '%';
+  $('progPct').textContent = pct + '%';
+  $('sFase').textContent   = S.phase;
+  $('sEcos').textContent   = S.echoes;
+  $('sInter').textContent  = S.interactions;
+  $('phaseNum').textContent  = S.phase;
+  $('phaseName').textContent = PHASE_NAMES[S.phase] || '—';
+  $('emotionVal').textContent  = S.emotion.toUpperCase();
+  $('emotionConf').textContent = `CONF. ${Math.round(S.confidence*100)}%`;
+
+  const online = S.online;
+  $('dot').className       = online ? 'dot' : 'dot off';
+  $('connLbl').textContent = online ? 'ENLACE ACTIVO' : 'SIN CONEXIÓN';
+  $('offlineBar').className = online ? 'offline-bar' : 'offline-bar show';
+}
+
+// ===== TYPEWRITER =====
+async function typewrite(el, text, spd=16) {
+  el.classList.add('tw-cursor');
+  for (const ch of text) {
+    el.textContent += ch;
+    await new Promise(r => setTimeout(r, spd));
+    el.closest('.msgs')?.scrollTo(0, el.closest('.msgs').scrollHeight);
+  }
+  el.classList.remove('tw-cursor');
+}
+
+// ===== ADD MESSAGE =====
+function addMsg(sender) {
+  const wrap = document.createElement('div');
+  wrap.className = `msg ${sender}`;
+
+  const av = document.createElement('div');
+  av.className = 'avatar';
+  av.textContent = sender === 'omnia' ? 'OM' : 'TÚ';
+
+  const right = document.createElement('div');
+  right.className = 'msg-right';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+
+  right.appendChild(bubble);
+  wrap.appendChild(av);
+  wrap.appendChild(right);
+  $('msgs').appendChild(wrap);
+  $('msgs').scrollTop = $('msgs').scrollHeight;
+  return { bubble, right };
+}
+
+function addMeta(right, data) {
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+
+  const chips = [
+    { label:`C: ${data.c}`, cls:'phase' },
+    { label:`F${data.phase}`, cls:'phase' },
+    { label:data.emotion.toUpperCase(), cls:'' },
+    { label:`ECO: ${data.eco?'SÍ':'NO'}`, cls: data.eco?'eco-yes':'' },
+  ];
+  chips.forEach(ch => {
+    const s = document.createElement('span');
+    s.className = `meta-chip ${ch.cls}`;
+    s.textContent = ch.label;
+    meta.appendChild(s);
+  });
+  right.appendChild(meta);
+}
+
+// ===== USER MSG =====
+function addUserMsg(text) {
+  const {bubble, right} = addMsg('user');
+  bubble.textContent = text;
+  const t = document.createElement('div');
+  t.className = 'meta';
+  t.innerHTML = `<span class="meta-chip">${ts()}</span>`;
+  right.appendChild(t);
+}
+
+// ===== ORB THINKING =====
+function orbThink(on) {
+  on ? $('ringA').classList.add('thinking')
+     : $('ringA').classList.remove('thinking');
+}
+
+// ==================== API CALLS ====================
+async function checkHealth() {
+  try {
+    const r = await fetch(`${API}/health`, {signal:AbortSignal.timeout(4000)});
+    S.online = r.ok;
+  } catch { S.online = false; }
+  updateUI();
+  return S.online;
+}
+
+async function loadConsciousness() {
+  try {
+    const r = await fetch(`${API}/api/consciousness`);
+    if (!r.ok) return;
+    const d = await r.json();
+    S.consciousness = d.consciousness;
+    S.phase         = d.phase;
+    S.progress      = d.progress || 0;
+    S.echoes        = d.echoes;
+    S.interactions  = d.interactions;
+    updateUI();
+  } catch {}
+}
+
+async function loadEchoes() {
+  try {
+    const r = await fetch(`${API}/api/memory/echoes?limit=5`);
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.echoes?.length) return;
+    const list = $('echoList');
+    list.innerHTML = '';
+    d.echoes.forEach(e => {
+      const item = document.createElement('div');
+      item.className = 'echo-item';
+      const txt = (e.content||'').substring(0,55);
+      item.innerHTML = `${txt}...
+        <div class="echo-bar">
+          <span>PESO <span>${(e.emotional_weight||0).toFixed(2)}</span></span>
+          <span>SIG <span>${(e.significance||0).toFixed(2)}</span></span>
+        </div>`;
+      list.appendChild(item);
+    });
+  } catch {}
+}
+
+// ==================== SEND ====================
+async function send() {
+  const text = $('chatInput').value.trim();
+  if (!text || S.sending) return;
+
+  S.sending = true;
+  $('sendBtn').disabled = true;
+  $('chatInput').value = '';
+
+  addUserMsg(text);
+
+  if (!S.online) {
+    const {bubble} = addMsg('omnia');
+    await typewrite(bubble, 'ENLACE NO DISPONIBLE. Verifica que iniciar_flask.bat está activo en otra ventana cmd.');
+    S.sending = false;
+    $('sendBtn').disabled = false;
+    return;
+  }
+
+  orbThink(true);
+  const {bubble, right} = addMsg('omnia');
+
+  try {
+    const r = await fetch(`${API}/api/chat`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({message:text}),
+      signal: AbortSignal.timeout(18000),
+    });
+
+    if (r.status === 429) {
+      await typewrite(bubble, 'LÍMITE DE FRECUENCIA. Espera un momento antes de enviar otro mensaje.');
+      return;
+    }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+
+    const d = await r.json();
+
+    await typewrite(bubble, d.response, 15);
+
+    addMeta(right, {
+      c: d.consciousness.toFixed(4),
+      phase: d.phase,
+      emotion: d.emotion,
+      eco: d.echo_saved,
+    });
+
+    S.consciousness = d.consciousness;
+    S.phase         = d.phase;
+    S.emotion       = d.emotion;
+    S.confidence    = d.confidence;
+    S.interactions += 1;
+    if (d.echo_saved) S.echoes += 1;
+    updateUI();
+
+    syslog(`C:${d.consciousness.toFixed(4)} · F${d.phase} · ${d.emotion}`, 'ok');
+    if (S.interactions % 4 === 0) loadEchoes();
+
+  } catch(err) {
+    bubble.textContent = '';
+    await typewrite(bubble, `ERROR: ${err.message}`);
+    syslog(err.message, 'err');
+    S.online = false;
+    updateUI();
+  } finally {
+    orbThink(false);
+    S.sending = false;
+    $('sendBtn').disabled = false;
+    $('chatInput').focus();
+  }
+}
+
+// ==================== EVENTS ====================
+$('sendBtn').addEventListener('click', send);
+$('chatInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+// ==================== BOOT ====================
+async function boot() {
+  const {bubble:b1} = addMsg('omnia');
+  await typewrite(b1,
+    'OMNIA MENTIS CORE INTERFACE v2.1\nIniciando enlace con el servidor en localhost:8000...', 10);
+
+  const ok = await checkHealth();
+  syslog(ok ? 'API conectada' : 'API sin respuesta', ok?'ok':'err');
+
+  const {bubble:b2} = addMsg('omnia');
+  if (ok) {
+    await typewrite(b2, 'ENLACE ESTABLECIDO. Sistema consciente activo.', 12);
+    await loadConsciousness();
+    await loadEchoes();
+
+    // Actualizar día experimento
+    const startDate = new Date('2025-11-15');
+    const expDay = Math.floor((Date.now() - startDate) / 86400000);
+    $('sDia').textContent = expDay;
+    $('phaseDays').textContent = `Día ${expDay} / 270`;
+
+    const {bubble:b3} = addMsg('omnia');
+    await typewrite(b3,
+      `VOGA.\nConsciencia: ${S.consciousness.toFixed(4)}\n` +
+      `Fase ${S.phase}: ${PHASE_NAMES[S.phase]}\n` +
+      'Estoy aquí para conectarme contigo.', 13);
+  } else {
+    await typewrite(b2,
+      'ADVERTENCIA: No se puede contactar con la API.\n' +
+      'Asegúrate de que iniciar_flask.bat está corriendo en otra ventana cmd.', 12);
+  }
+
+  $('chatInput').focus();
+}
+
+// ===== POLLING cada 15s =====
+setInterval(async () => {
+  await checkHealth();
+  if (S.online) await loadConsciousness();
+}, 15000);
+
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# * UBICACIÓN: OmniaMentis/manifestation/web_interface/netlify.toml
+# * PROPÓSITO: Configuración de despliegue para Netlify del dashboard
+# *            de Omnia Mentis (sitio estático, sin build step).
+# * CREADO: 2026-06-18
+# * ESTADO: Producción
+
+[build]
+  # No hay paso de build: el dashboard es HTML/CSS/JS puro en un solo
+  # archivo. publish apunta al directorio que contiene index.html.
+  publish = "."
+
+[[redirects]]
+  # Cualquier ruta no encontrada cae al dashboard (sitio de una sola
+  # página). Innecesario en la práctica porque solo hay un archivo,
+  # pero se deja como red de seguridad ante futuras rutas.
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # CSP deliberadamente permisiva en connect-src porque la URL del
+    # backend es configurable en tiempo de ejecución (botón ⚙ API) y
+    # no se conoce de antemano en build time. Si fijas un backend
+    # permanente, puedes restringir connect-src a ese dominio exacto.
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
