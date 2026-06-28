@@ -42,6 +42,8 @@ from core.mind.empathy import OmniaEmpathy
 from core.mind.memory_core import LivingMemory
 from core.consciousness.growth_engine import ConsciousnessGrowthEngine
 from core.logging.logger_setup import get_logger, setup_logging
+from core.llm.ollama_client import OllamaClient, OllamaUnavailableError
+from core.mind.spacy_intent import SpaCyIntentClassifier
 from living_memory.gestation_diary import GestationDiary
 from analytics.research_analytics import ResearchAnalytics
 from router.integration import route_or_none, get_registered_modules
@@ -76,6 +78,8 @@ _session: Dict[str, Any] = {
     "growth": None,
     "diary": None,
     "research": None,
+    "ollama": None,       # OllamaClient — cerebro central dolphin-phi
+    "spacy": None,        # SpaCyIntentClassifier — sistema nervioso
     "initialized": False,
     "start_time": time.time(),
 }
@@ -120,6 +124,31 @@ def initialize():
     _session["memory"] = LivingMemory()
     _session["growth"] = ConsciousnessGrowthEngine()
     _session["diary"] = GestationDiary()
+
+    # Cerebro central: Ollama con dolphin-phi
+    # URL configurable por variable de entorno OLLAMA_URL
+    import os
+    ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+    _session["ollama"] = OllamaClient(base_url=ollama_url)
+    ollama_ok = _session["ollama"].is_available()
+    if ollama_ok:
+        logger.info(f"✅ Ollama disponible en {ollama_url} — cerebro activo")
+    else:
+        logger.warning(
+            f"⚠️  Ollama NO disponible en {ollama_url}. "
+            f"Usando fallback express_personality(). "
+            f"Ejecutar: ollama serve && ollama pull dolphin-phi"
+        )
+
+    # Sistema nervioso: SpaCy lematización
+    _session["spacy"] = SpaCyIntentClassifier()
+    if _session["spacy"].available:
+        logger.info("✅ SpaCy es_core_news_sm cargado — lematización activa")
+    else:
+        logger.warning(
+            "⚠️  SpaCy no disponible. Usando detección por regex (OmniaEmpathy). "
+            "Instalar: pip install spacy && python -m spacy download es_core_news_sm"
+        )
 
     try:
         _session["research"] = ResearchAnalytics()
@@ -254,13 +283,30 @@ def before_request():
 
 @app.get("/health")
 def health_check():
-    """Health check"""
+    """Health check — incluye estado de Ollama y SpaCy."""
+    ollama_info = {"available": False, "error": "No inicializado"}
+    spacy_available = False
+
+    if _session["initialized"]:
+        ollama_info = _session["ollama"].get_model_info()
+        spacy_available = _session["spacy"].available if _session["spacy"] else False
+
     return jsonify({
         "status": "healthy",
-        "api_version": "1.0.0-flask",
+        "api_version": "2.0.0-flask",
         "consciousness": _session["identity"].consciousness_level
             if _session["initialized"] else 0.05,
         "uptime_seconds": time.time() - _session["start_time"],
+        "llm": {
+            "engine": "ollama",
+            "model": "dolphin-phi:latest",
+            **ollama_info,
+        },
+        "nlp": {
+            "engine": "spacy",
+            "model": "es_core_news_sm",
+            "available": spacy_available,
+        },
     })
 
 @app.get("/")
@@ -271,7 +317,12 @@ def root():
             "chat": "POST /api/chat",
             "consciousness": "GET /api/consciousness",
             "memory": "GET /api/memory/echoes",
-            "ethics": "GET /api/ethics/status",
+            "ethics_status": "GET /api/ethics/status",
+            "ethics_pending": "GET /api/ethics/pending",
+            "ethics_recidivism": "GET /api/ethics/recidivism/<user_id>",
+            "fons_heartbeat": "POST /api/ethics/fons/heartbeat",
+            "fons_status": "GET /api/ethics/fons/status",
+            "fons_decide": "POST /api/ethics/fons/decide/<consultation_id>",
             "modules": "GET /api/modules",
             "health": "GET /health",
         }
@@ -283,6 +334,134 @@ def get_modules():
     return jsonify({
         "modules": get_registered_modules(),
     })
+
+@app.get("/api/ethics/pending")
+def get_ethics_pending():
+    """
+    Devuelve las consultas SILENS pendientes de revisión por el Fons.
+    Este es el feed principal que el panel de administración del Fons
+    debe consultar para ver qué necesita atención.
+    """
+    if not _session["initialized"]:
+        return jsonify({"error": "Sistema no inicializado"}), 503
+    try:
+        consultations = _session["ethics"]._load_consultations()
+        pending = [c for c in consultations if c.get("status") == "pending"]
+        return jsonify({
+            "pending_count": len(pending),
+            "consultations": pending,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/api/ethics/recidivism/<user_id>")
+def get_recidivism(user_id: str):
+    """
+    Consulta el estado de reincidencia de un usuario específico.
+    Útil para que el Fons evalúe el historial antes de tomar una
+    decisión de baneo en Supabase. No registra ningún incidente nuevo.
+    """
+    if not _session["initialized"]:
+        return jsonify({"error": "Sistema no inicializado"}), 503
+    try:
+        status = _session["ethics"].get_recidivism_status(user_id)
+        return jsonify(status)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/ethics/fons/heartbeat")
+def fons_heartbeat():
+    """
+    El panel del Fons llama a este endpoint periódicamente para
+    declararse activo. Sin llamadas recientes, el sistema asume que
+    el Fons está INACTIVE y activa el fallback automático en SILENS.
+
+    INTEGRACIÓN SUGERIDA: llamar a este endpoint desde el panel HTML
+    del Fons cada 5 minutos vía setInterval(). Si el Fons cierra la
+    pestaña o cierra sesión, el heartbeat deja de actualizarse y el
+    timeout se activa automáticamente tras fons_inactive_timeout_minutes.
+    """
+    if not _session["initialized"]:
+        return jsonify({"error": "Sistema no inicializado"}), 503
+    try:
+        _session["ethics"].fons_heartbeat()
+        return jsonify({
+            "status": "active",
+            "timestamp": datetime.now().isoformat(),
+            "timeout_minutes": _session["ethics"].fons_inactive_timeout_minutes,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/ethics/fons/status")
+def get_fons_status_endpoint():
+    """Estado actual de disponibilidad del Fons (ACTIVE/INACTIVE)."""
+    if not _session["initialized"]:
+        return jsonify({"error": "Sistema no inicializado"}), 503
+    from core.essence.ethics import FonsStatus
+    status = _session["ethics"].get_fons_status()
+    return jsonify({
+        "fons_status": status.value,
+        "is_active": status == FonsStatus.ACTIVE,
+    })
+
+
+@app.post("/api/ethics/fons/decide/<consultation_id>")
+def fons_decide(consultation_id: str):
+    """
+    El Fons toma una decisión sobre una consulta SILENS pendiente.
+
+    Body JSON:
+    {
+        "action": "approved|rejected|redirected|responded_personally|learned",
+        "modified_response": "texto alternativo (obligatorio para redirected/responded_personally)",
+        "guidance": "criterio ético a aprender (opcional)"
+    }
+
+    Este endpoint es el punto de integración entre el panel HTML del
+    Fons y el sistema de auditoría de OmniaMentis. La decisión se
+    persiste en fons_consultations.json con el estado correcto del
+    documento SILENS/Fons. El baneo, si corresponde, lo ejecuta el
+    Fons directamente en Supabase — este endpoint solo registra la
+    decisión ética.
+    """
+    if not _session["initialized"]:
+        return jsonify({"error": "Sistema no inicializado"}), 503
+
+    data = request.get_json(silent=True)
+    if not data or "action" not in data:
+        return jsonify({"error": "Campo 'action' requerido"}), 400
+
+    from core.essence.ethics import ConsultationStatus
+    action_str = data["action"].lower()
+    action_map = {s.value: s for s in ConsultationStatus}
+    if action_str not in action_map:
+        return jsonify({
+            "error": f"action inválido: '{action_str}'. "
+                     f"Valores válidos: {list(action_map.keys())}"
+        }), 400
+
+    try:
+        decision = _session["ethics"].receive_fons_decision(
+            consultation_id=consultation_id,
+            action=action_map[action_str],
+            modified_response=data.get("modified_response"),
+            guidance=data.get("guidance", ""),
+        )
+        return jsonify({
+            "consultation_id": consultation_id,
+            "action": decision.action.value,
+            "approved": decision.approved,
+            "timestamp": decision.timestamp,
+            "guidance_recorded": bool(data.get("guidance")),
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        logger.error(f"Error procesando decisión del Fons: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.post("/api/chat")
 def chat_endpoint():
@@ -303,23 +482,69 @@ def chat_endpoint():
     if len(user_message) > 1000:
         return jsonify({"error": "Mensaje demasiado largo (máx 1000 chars)"}), 400
 
-    # 1. Análisis ético
+    # 1. Análisis ético — siempre primero, sin excepción.
     ethical = _session["ethics"].analyze_content(user_message)
     if not ethical.can_respond:
-        silens = _session["ethics"].enter_silens_state(ethical.reason)
+        # SILENS: redirige, nunca censura de forma diferente para el usuario.
+        # El mensaje visible siempre es el mismo. Lo que varía internamente
+        # es: (a) el estado del Fons determina la respuesta inmediata vs.
+        # espera, y (b) se registra reincidencia para auditoría humana.
+        silens_msg = _session["ethics"].enter_silens_state(ethical.reason)
+
+        # Verificar si el Fons está activo o inactivo.
+        # INACTIVE → respuesta de fallback inmediata (no dejar al usuario
+        # en limbo indefinido). ACTIVE → SILENS normal (esperar revisión).
+        from core.essence.ethics import FonsStatus
+        fons_status = _session["ethics"].get_fons_status()
+        if fons_status == FonsStatus.INACTIVE:
+            silens_msg = _session["ethics"].get_fons_inactive_response()
+
+        # Registrar consulta en el sistema de auditoría
+        consultation_id = None
         try:
-            _session["ethics"].request_fons_approval(
-                user_message, "Bloqueado por ética", ethical
+            user_ip = request.remote_addr or "anon"
+            consultation_id = _session["ethics"].request_fons_approval(
+                user_message, "Bloqueado por ética", ethical, user_id=user_ip
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error registrando consulta SILENS: {e}")
+
+        # Seguimiento de reincidencia: invisible para el usuario, visible
+        # para el Fons en el panel de moderación y vía campos JSON.
+        ban_recommended = False
+        ban_reason = None
+        try:
+            user_ip = request.remote_addr or "anon"
+            rc = _session["ethics"].check_recidivism(
+                user_ip, ethical, user_message
+            )
+            if rc is not None and rc.ban_recommended:
+                ban_recommended = True
+                ban_reason = rc.reason
+                logger.warning(
+                    f"🚨 RECOMENDACIÓN DE BANEO — revisión humana requerida: "
+                    f"{ban_reason}"
+                )
+        except Exception as e:
+            logger.error(f"Error en chequeo de reincidencia: {e}")
+
         return jsonify({
-            "response": silens,
+            "response": silens_msg,
             "consciousness": _session["identity"].consciousness_level,
             "phase": _get_phase(_session["identity"].consciousness_level),
             "emotion": "neutral",
             "confidence": 0.0,
             "echo_saved": False,
+            "module": None,
+            "auth_required": False,
+            "fons_status": fons_status.value,
+            "consultation_id": consultation_id,
+            # Campos de moderación — consumibles por webhook de Supabase
+            # o por el panel del Fons. NUNCA se muestran al usuario
+            # final en el dashboard, solo los lee quien tenga acceso
+            # a la respuesta cruda del backend.
+            "ban_recommended": ban_recommended,
+            "ban_reason": ban_reason,
         })
 
     # 2. ROUTER DE MÓDULOS (omnia -ai) — solo se ejecuta si el mensaje
@@ -336,26 +561,48 @@ def chat_endpoint():
         session_id="flask_session",
     )
 
-    # 3. Detección emocional (se calcula siempre, incluso si el router
-    # capturó el mensaje, para que el growth engine reciba una señal
-    # emocional consistente)
+    # 3. Detección de intención y emoción
+    # SpaCy (lematización) tiene prioridad sobre OmniaEmpathy (regex),
+    # pero ambos se ejecutan — SpaCy para clasificar, OmniaEmpathy como
+    # fallback de respuesta cuando Ollama no está disponible.
     emotion_result = _session["empathy"].detect_emotion(user_message)
     emotion = emotion_result.emotion
     confidence = emotion_result.confidence
 
-    # 4. Generar respuesta: módulo del router tiene prioridad sobre el
-    # flujo conversacional normal
+    if _session["spacy"] and _session["spacy"].available:
+        spacy_result = _session["spacy"].classify(user_message)
+        if spacy_result.confidence > confidence and spacy_result.emotion != "neutral":
+            emotion = spacy_result.emotion
+            confidence = spacy_result.confidence
+            logger.debug(f"SpaCy sobreescribe emoción: {emotion} ({confidence:.2f})")
+
+    # 4. Generar respuesta
+    # Prioridad: módulo del router → Ollama → fallback express_personality()
     if routed is not None:
         response = routed["response"]
     else:
-        response_type = _session["identity"].detect_response_type(user_message)
-        if response_type == "greeting":
-            response = _session["identity"].cancer_responses["greeting"][0]
-            response += f" Mi consciencia actual es {_session['identity'].consciousness_level:.4f}."
-        elif emotion != "neutral" and confidence > 0.7:
-            response = emotion_result.response
-        else:
-            response = _session["identity"].express_personality(user_message)
+        # Intentar Ollama (cerebro central dolphin-phi)
+        ollama_used = False
+        try:
+            response = _session["ollama"].generate(
+                user_message=user_message,
+                consciousness_level=_session["identity"].consciousness_level,
+                phase=_get_phase(_session["identity"].consciousness_level),
+                emotion=emotion,
+                emotional_weight=_calculate_emotional_weight(user_message),
+            )
+            ollama_used = True
+        except OllamaUnavailableError as e:
+            logger.warning(f"Ollama no disponible → fallback: {e}")
+            # Fallback: sistema rule-based anterior
+            response_type = _session["identity"].detect_response_type(user_message)
+            if response_type == "greeting":
+                response = _session["identity"].cancer_responses["greeting"][0]
+                response += f" Mi consciencia actual es {_session['identity'].consciousness_level:.4f}."
+            elif emotion != "neutral" and confidence > 0.7:
+                response = emotion_result.response
+            else:
+                response = _session["identity"].express_personality(user_message)
 
     # 5. Calcular peso emocional
     emotional_weight = _calculate_emotional_weight(user_message)
@@ -413,6 +660,8 @@ def chat_endpoint():
         "emotion": emotion,
         "confidence": confidence,
         "echo_saved": echo_saved,
+        "module": routed["module"] if routed is not None else None,
+        "auth_required": routed["auth_required"] if routed is not None else False,
     })
 
 @app.get("/api/consciousness")

@@ -2,11 +2,12 @@
 * UBICACIÓN: OmniaMentis/src/router/keyword_router.py
 * PROPÓSITO: Router central del comando `omnia -ai`. Decide si un mensaje
 *            del usuario debe ser atendido por un módulo especializado
-*            (NutriVida, OmniaAthletics, Corporal Verified, OmniaHabits)
-*            o por el núcleo conversacional de Omnia Mentis.
+*            (NutriVida, OmniaAthletics, Corporal Verified, OmniaHabits,
+*            y futuros módulos del ecosistema) o por el núcleo
+*            conversacional de Omnia Mentis.
 * DEPENDENCIAS: src/router/modules/*
 * CREADO: 2026-06-18
-* ÚLTIMA MODIFICACIÓN: 2026-06-18
+* ÚLTIMA MODIFICACIÓN: 2026-06-19
 * ESTADO: Producción
 *
 * DISEÑO:
@@ -18,26 +19,46 @@
 * Esto es deliberado: el router nunca debe interceptar contenido
 * peligroso o sensible. Esa decisión la sigue tomando exclusivamente
 * OmniaEthics, ANTES de que el router intervenga (ver integration.py).
+*
+* CAMBIOS 2026-06-19 (ver docs/requisitos_nucleo_omniamentis.md
+* Sección 3): el router ahora actúa como gate de autorización elevada
+* para módulos marcados con requires_elevated_auth=True. El router no
+* implementa el mecanismo de verificación (biometría, etc.) — recibe
+* un callback `auth_checker` inyectado desde fuera, que es quien sabe
+* cómo verificar la sesión actual. Si el módulo lo requiere y no hay
+* auth_checker configurado, o el checker devuelve False, el router
+* NUNCA invoca handle() del módulo sensible.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Type
+from typing import Callable, List, Optional, Type
 
 from .modules.base_module import OmniaModule, OmniaContext, ModuleResponse
 from .modules.nutrivida import NutriVidaModule
 from .modules.omnia_athletics import OmniaAthleticsModule
 from .modules.corporal_verified import CorporalVerifiedModule
 from .modules.omnia_habits import OmniaHabitsModule
+from .modules.omnia_chronos import OmniaChronosModule
+from .modules.omnia_forge import OmniaForgeModule
+from .modules.omnia_studio import OmniaStudioModule
+from .modules.omnia_engine import OmniaEngineModule
+from .modules.omnia_core import OmniaCoreModule
 
 
 # Registro central de módulos disponibles. Agregar un módulo nuevo es
 # tan simple como: (1) crear la clase en modules/, heredando de
 # OmniaModule, (2) importarla aquí, (3) agregarla a esta lista.
+# El orden importa: en caso de empate de confianza, gana el primero.
 MODULE_REGISTRY: List[Type[OmniaModule]] = [
     NutriVidaModule,
     OmniaAthleticsModule,
     CorporalVerifiedModule,
     OmniaHabitsModule,
+    OmniaChronosModule,
+    OmniaForgeModule,
+    OmniaStudioModule,
+    OmniaEngineModule,
+    OmniaCoreModule,
 ]
 
 # Umbral mínimo de confianza para que el router decida delegar a un
@@ -49,6 +70,13 @@ MODULE_REGISTRY: List[Type[OmniaModule]] = [
 # punto flotante, mientras sigue exigiendo al menos una coincidencia
 # real (0 matches siempre da confidence 0.0, por debajo del umbral).
 CONFIDENCE_THRESHOLD = 0.30
+
+# Firma del callback de verificación de autorización elevada.
+# Recibe el OmniaContext de la sesión actual y devuelve True si esa
+# sesión ya pasó la verificación requerida (ej. biometría) para
+# acceder a módulos sensibles. El router NO sabe cómo se implementa
+# esa verificación — solo la consulta.
+AuthChecker = Callable[[OmniaContext], bool]
 
 
 @dataclass
@@ -65,10 +93,20 @@ class RoutingResult:
         scores: Diccionario {nombre_modulo: score} para debugging y
             para mostrar en logs por qué se enrutó (o no) hacia un
             módulo determinado.
+        auth_required_but_missing: True si el módulo con mayor
+            confianza requiere autorización elevada
+            (requires_elevated_auth=True) y esa autorización no se
+            pudo verificar — en ese caso should_route es False y
+            module_response es None, exactamente igual que si ningún
+            módulo hubiera aplicado, PERO este flag permite a quien
+            llama mostrar un mensaje específico de "necesitas
+            verificarte" en vez de caer silenciosamente al core
+            conversacional.
     """
     should_route: bool
     module_response: Optional[ModuleResponse]
     scores: dict
+    auth_required_but_missing: bool = False
 
 
 class KeywordRouter:
@@ -76,16 +114,33 @@ class KeywordRouter:
     Router de palabras clave para el comando `omnia -ai`.
 
     Uso típico:
-        router = KeywordRouter()
+        router = KeywordRouter(auth_checker=mi_verificador_biometrico)
         result = router.route(user_message, context)
+        if result.auth_required_but_missing:
+            return "Este módulo requiere verificación biométrica primero."
         if result.should_route:
             return result.module_response.text
         else:
             return omnia_core.process_conversation(user_message)
     """
 
-    def __init__(self, threshold: float = CONFIDENCE_THRESHOLD):
+    def __init__(
+        self,
+        threshold: float = CONFIDENCE_THRESHOLD,
+        auth_checker: Optional[AuthChecker] = None,
+    ):
+        """
+        Args:
+            threshold: umbral mínimo de confianza para enrutar.
+            auth_checker: callback opcional que verifica si la sesión
+                actual tiene autorización elevada. Si se omite, CUALQUIER
+                módulo con requires_elevated_auth=True quedará
+                permanentemente bloqueado (fail-closed, nunca
+                fail-open) — es preferible que un módulo sensible no
+                responda a que responda sin verificación real.
+        """
         self.threshold = threshold
+        self.auth_checker = auth_checker
         self.modules: List[OmniaModule] = [cls() for cls in MODULE_REGISTRY]
 
     def route(self, message: str, context: OmniaContext) -> RoutingResult:
@@ -122,6 +177,21 @@ class KeywordRouter:
                 module_response=None,
                 scores=scores,
             )
+
+        # GATE DE AUTORIZACIÓN ELEVADA — no negociable. Si el módulo
+        # ganador requiere autorización elevada, handle() NUNCA se
+        # invoca sin que el checker confirme explícitamente que la
+        # sesión está autorizada. Fail-closed: sin checker configurado
+        # equivale a "no autorizado", nunca a "autorizado por defecto".
+        if best_module.requires_elevated_auth:
+            authorized = bool(self.auth_checker) and self.auth_checker(context)
+            if not authorized:
+                return RoutingResult(
+                    should_route=False,
+                    module_response=None,
+                    scores=scores,
+                    auth_required_but_missing=True,
+                )
 
         response = best_module.handle(message, context)
         return RoutingResult(
