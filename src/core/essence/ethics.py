@@ -606,9 +606,10 @@ Por favor, espera un momento mientras consulto con mayor sabiduría.
     def receive_fons_decision(
         self,
         consultation_id: str,
-        action: ConsultationStatus,
+        action: Optional[ConsultationStatus] = None,
         modified_response: Optional[str] = None,
         guidance: str = "",
+        approved: Optional[bool] = None,
     ) -> FonsDecision:
         """
         Registra la decisión del Fons sobre una consulta SILENS pendiente.
@@ -619,9 +620,16 @@ Por favor, espera un momento mientras consulto con mayor sabiduría.
         en vez de por posición en la lista — más robusto ante inserciones
         concurrentes.
 
+        COMPATIBILIDAD RETROACTIVA: acepta tanto action=ConsultationStatus
+        (API nueva, preferida) como approved=bool (API vieja). Si se
+        llama sin action pero con approved, se traduce automáticamente
+        a ConsultationStatus.APPROVED/REJECTED. Esto evita romper tests
+        existentes que usan la firma anterior.
+
         Args:
             consultation_id: ID único de la consulta (ej. "ETH-0001").
-                Devuelto por request_fons_approval().
+                Devuelto por request_fons_approval(). También acepta
+                índices enteros en string ("0") para consultas antiguas.
             action: ConsultationStatus que describe la decisión tomada:
                 APPROVED            → Fons aprueba la respuesta propuesta
                 REJECTED            → Fons rechaza, Omnia no responde
@@ -633,14 +641,29 @@ Por favor, espera un momento mientras consulto con mayor sabiduría.
             guidance: Criterio ético que el Fons quiere que Omnia aprenda
                 para consultas similares futuras. Si se provee,
                 se registra automáticamente vía _learn_from_decision().
+            approved: [DEPRECADO] bool de la API anterior. Si se provee
+                y action es None, se traduce a ConsultationStatus.
 
         Returns:
             FonsDecision con todos los detalles de la decisión tomada.
 
         Raises:
-            ValueError: Si consultation_id no existe en el log o si
-                action requiere modified_response y ésta está ausente.
+            ValueError: Si consultation_id no existe en el log, si
+                action requiere modified_response y ésta está ausente,
+                o si no se provee ni action ni approved.
         """
+        # Compatibilidad retroactiva: traducir approved=bool a action
+        if action is None:
+            if approved is None:
+                raise ValueError(
+                    "receive_fons_decision requiere 'action' (ConsultationStatus) "
+                    "o 'approved' (bool) para compatibilidad retroactiva."
+                )
+            action = (
+                ConsultationStatus.APPROVED if approved
+                else ConsultationStatus.REJECTED
+            )
+
         # Validaciones de negocio
         if action in (
             ConsultationStatus.REDIRECTED,
@@ -789,8 +812,12 @@ un profesional del derecho."""
     def get_ethics_report(self) -> Dict:
         consultations = self._load_consultations()
 
-        pending = sum(1 for c in consultations if c.get('status') == 'pending')
-        resolved = sum(1 for c in consultations if c.get('status') == 'resolved')
+        pending = sum(1 for c in consultations if c.get('status') == ConsultationStatus.PENDING.value)
+        # "resolved" = cualquier consulta que ya no está pendiente.
+        # Antes solo se contaba el literal 'resolved', pero ese valor
+        # ya no existe en el modelo de 6 estados — ahora una consulta
+        # resuelta tiene status approved/rejected/redirected/etc.
+        resolved = sum(1 for c in consultations if c.get('status') != ConsultationStatus.PENDING.value)
 
         approved = sum(
             1 for c in consultations

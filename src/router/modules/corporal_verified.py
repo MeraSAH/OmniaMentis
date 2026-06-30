@@ -1,33 +1,22 @@
 """
-* UBICACIÓN: OmniaMentis/src/router/modules/corporal_verified.py
-* PROPÓSITO: Módulo enrutable para temas de composición corporal, medidas
-*            y seguimiento físico verificado.
-* DEPENDENCIAS: src/router/modules/base_module.py
-* CREADO: 2026-06-18
-* ÚLTIMA MODIFICACIÓN: 2026-06-18
-* ESTADO: Producción (lógica de routing) / Stub funcional (lógica de
-*         dominio — proyecto independiente aún no integrado)
+* UBICACION: OmniaMentis/src/router/modules/corporal_verified.py
+* PROPOSITO: Modulo de composicion corporal con requires_elevated_auth=True
+* ESTADO: Produccion
 """
 
 from typing import List
-
 from .base_module import OmniaModule, OmniaContext, ModuleResponse
 
 
 class CorporalVerifiedModule(OmniaModule):
-    """
-    Captura mensajes relacionados con composición corporal, medidas
-    antropométricas y seguimiento físico verificado (fotos, % de grasa,
-    circunferencias).
-
-    ESTADO ACTUAL: routing real; el dominio de verificación y tracking
-    corporal pertenece al proyecto Corporal Verified, independiente y
-    aún no integrado.
-    """
 
     @property
     def name(self) -> str:
         return "Corporal Verified"
+
+    @property
+    def requires_elevated_auth(self) -> bool:
+        return True
 
     def keywords(self) -> List[str]:
         return [
@@ -39,18 +28,13 @@ class CorporalVerifiedModule(OmniaModule):
         ]
 
     def handle(self, message: str, context: OmniaContext) -> ModuleResponse:
-        text = (
-            f"📏 Detecté que tu consulta es sobre composición corporal "
-            f"o medidas.\n\n"
-            f"El módulo Corporal Verified (registro de medidas, "
-            f"verificación de progreso, % de grasa corporal) es un "
-            f"proyecto independiente aún no conectado a esta API.\n\n"
-            f"♋ Cuando esté integrado, esta consulta activará el "
-            f"registro y análisis real de tus medidas."
-        )
         return ModuleResponse(
-            text=text,
+            text=(
+                "📏 Detecté que tu consulta es sobre composición corporal.\n\n"
+                "Corporal Verified (medidas, % de grasa, verificación de progreso) "
+                "es un proyecto independiente aún no integrado.\n\n"
+                "♋ Cuando esté activo, registraré y analizaré tus medidas."
+            ),
             module_name=self.name,
-            requires_followup=False,
             data={"status": "not_integrated", "domain": "body_composition"},
         )

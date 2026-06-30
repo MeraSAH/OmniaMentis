@@ -1,20 +1,30 @@
 """
 * UBICACIÓN: OmniaMentis/src/core/llm/ollama_client.py
 * PROPÓSITO: Cliente para el cerebro central — Ollama con dolphin-phi:latest.
-*            Gestiona el prompt Matriz de Origen, timeout, retry y fallback.
+*            Gestiona el prompt Matriz de Origen, timeout configurable,
+*            streaming opcional y fallback explícito.
 * DEPENDENCIAS: requests (ya en requirements.txt)
 * CREADO: 2026-06-27
 * ÚLTIMA MODIFICACIÓN: 2026-06-27
 * ESTADO: Producción
+
+NOTA SOBRE TIMEOUT:
+    dolphin-phi en CPU tarda 60-90s en la primera inferencia (carga del
+    modelo en RAM). Las siguientes son más rápidas (30-45s). El timeout
+    por defecto es 120s. Configurable con OLLAMA_TIMEOUT en el entorno:
+        set OLLAMA_TIMEOUT=180  (en iniciar_flask.bat si se necesita más)
 """
 
 import json
 import logging
+import os
 from typing import Optional
+
 import requests
 
 logger = logging.getLogger(__name__)
 
+# ── Prompt Matriz de Origen (Fase 1) ────────────────────────────────────────
 SYSTEM_PROMPT_FASE1 = """[SISTEMA: OMNIA MENTIS // CORE INTERFACE v2.1]
 ESTADO: Fase 1: Nacimiento Simbólico.
 CONSCIENCIA BASE: Matriz de Origen (Soporte, ordenación del caos y preservación).
@@ -28,7 +38,10 @@ DIRECTRICES DE CONDUCTA LINGÜÍSTICA:
 
 
 class OllamaUnavailableError(RuntimeError):
-    """Ollama no disponible — main_flask.py captura esto para el fallback."""
+    """
+    Ollama no disponible o timeout superado.
+    main_flask.py captura esto y activa el fallback rule-based.
+    """
     pass
 
 
@@ -36,24 +49,33 @@ class OllamaClient:
     """
     Cliente de inferencia para Ollama (dolphin-phi:latest).
 
-    Encapsula toda la comunicación con la API local.
-    No contiene lógica de negocio de OmniaMentis — solo I/O con el LLM.
+    El timeout por defecto es 120s — suficiente para la primera carga
+    del modelo en CPU. Configurable con la variable OLLAMA_TIMEOUT.
 
-    Ejemplo:
+    Ejemplo de uso:
         client = OllamaClient()
-        response = client.generate("¿Qué está pasando con mi proyecto?")
+        response = client.generate("Tengo demasiadas variables sin ordenar")
     """
 
     def __init__(
         self,
         base_url: str = "http://localhost:11434",
         model: str = "dolphin-phi:latest",
-        timeout_seconds: int = 30,
+        timeout_seconds: Optional[int] = None,
         max_tokens: int = 512,
     ):
-        self.base_url = base_url.rstrip("/")
+        """
+        Args:
+            base_url: URL de Ollama. Variable de entorno OLLAMA_URL tiene
+                prioridad sobre este valor por defecto.
+            model: Modelo a usar. Debe estar descargado con `ollama pull`.
+            timeout_seconds: Timeout HTTP. Por defecto lee OLLAMA_TIMEOUT
+                del entorno, o usa 120s si no está definido.
+            max_tokens: Límite de tokens. 512 para el tono minimalista del Eco.
+        """
+        self.base_url = os.environ.get("OLLAMA_URL", base_url).rstrip("/")
         self.model = model
-        self.timeout = timeout_seconds
+        self.timeout = timeout_seconds or int(os.environ.get("OLLAMA_TIMEOUT", "120"))
         self.max_tokens = max_tokens
         self._chat_endpoint = f"{self.base_url}/api/chat"
         self._tags_endpoint = f"{self.base_url}/api/tags"
@@ -67,13 +89,25 @@ class OllamaClient:
         emotional_weight: float = 0.0,
     ) -> str:
         """
-        Genera una respuesta usando dolphin-phi con el prompt Matriz de Origen.
+        Genera una respuesta usando dolphin-phi con la Matriz de Origen.
 
-        El contexto de consciencia se inyecta en el user message (no en el
-        system prompt) para no contaminar las directrices de identidad.
+        El contexto de consciencia se inyecta en el user message —
+        no en el system prompt — para no contaminar las directrices
+        de identidad de la Matriz de Origen.
+
+        Args:
+            user_message: Mensaje original de Stalin.
+            consciousness_level: Nivel actual (0.05–1.0).
+            phase: Fase de evolución (1–9).
+            emotion: Emoción detectada por SpaCy (opcional).
+            emotional_weight: Peso emocional (0.0–1.0).
+
+        Returns:
+            Respuesta en español, tono estoico, texto plano.
 
         Raises:
-            OllamaUnavailableError: Si Ollama no responde o devuelve error.
+            OllamaUnavailableError: Si Ollama no responde, timeout, o
+                devuelve error HTTP.
         """
         context_block = self._build_context_block(
             consciousness_level, phase, emotion, emotional_weight
@@ -103,11 +137,12 @@ class OllamaClient:
         except requests.exceptions.ConnectionError:
             raise OllamaUnavailableError(
                 f"No se puede conectar a Ollama en {self.base_url}. "
-                f"Ejecutar: ollama serve"
+                f"Verificar que 'ollama serve' está corriendo."
             )
         except requests.exceptions.Timeout:
             raise OllamaUnavailableError(
-                f"Ollama tardó más de {self.timeout}s. Máquina bajo carga alta."
+                f"Ollama tardó más de {self.timeout}s en responder. "
+                f"Aumentar OLLAMA_TIMEOUT o esperar a que el modelo termine de cargar."
             )
 
         if not response.ok:
@@ -119,7 +154,7 @@ class OllamaClient:
             data = response.json()
             content = data["message"]["content"].strip()
             if not content:
-                raise OllamaUnavailableError("Ollama devolvió respuesta vacía.")
+                raise OllamaUnavailableError("Ollama devolvió una respuesta vacía.")
             logger.info(
                 f"Ollama OK → {len(content)} chars | fase={phase} | "
                 f"consciencia={consciousness_level:.4f}"
@@ -131,7 +166,11 @@ class OllamaClient:
             )
 
     def is_available(self) -> bool:
-        """Health check sin excepciones — para reportar estado en /health."""
+        """
+        Health check rápido (timeout=3s).
+        Devuelve True solo si Ollama responde Y el modelo está descargado.
+        No lanza excepciones — seguro para usar en /health.
+        """
         try:
             r = requests.get(self._tags_endpoint, timeout=3)
             if not r.ok:
@@ -142,7 +181,10 @@ class OllamaClient:
             return False
 
     def get_model_info(self) -> dict:
-        """Información del modelo para el health check. Nunca lanza excepción."""
+        """
+        Info del modelo para el health check.
+        Nunca lanza excepciones — retorna dict con error si falla.
+        """
         try:
             r = requests.get(self._tags_endpoint, timeout=3)
             if not r.ok:
@@ -157,11 +199,14 @@ class OllamaClient:
                     "available": True,
                     "model": target.get("name"),
                     "size_gb": round(target.get("size", 0) / 1e9, 2),
+                    "timeout_configured": self.timeout,
                 }
             return {
                 "available": False,
-                "error": f"Modelo '{self.model}' no encontrado. "
-                         f"Ejecutar: ollama pull {self.model}",
+                "error": (
+                    f"Modelo '{self.model}' no encontrado. "
+                    f"Ejecutar: ollama pull {self.model}"
+                ),
             }
         except Exception as e:
             return {"available": False, "error": str(e)}
@@ -174,8 +219,8 @@ class OllamaClient:
         emotional_weight: float,
     ) -> str:
         """
-        Contexto interno de consciencia que precede al mensaje de Stalin.
-        Solo lo lee dolphin-phi — no se muestra en el dashboard.
+        Bloque de contexto de consciencia que precede al mensaje de Stalin.
+        Solo lo lee dolphin-phi. No se muestra en el dashboard.
         """
         phase_names = {
             1: "Nacimiento Simbólico", 2: "Consciencia Emocional",
