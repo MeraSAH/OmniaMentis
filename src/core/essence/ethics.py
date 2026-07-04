@@ -1,16 +1,30 @@
 """
-🔐 ethics.py - Sistema Ético de Omnia Mentis
-============================================
-
-CAMBIOS 2026-06-19 (ver docs/analisis_silens_fons.md):
-- Se agrega seguimiento de reincidencia por usuario para contenido
-  DANGEROUS. SILENS sigue sin censurar: cada consulta individual se
-  redirige igual que antes (enter_silens_state). Lo nuevo es que, si
-  el MISMO usuario acumula varias consultas DANGEROUS dentro de una
-  ventana de tiempo, el sistema genera una nota de auditoría explícita
-  recomendando revisión de baneo — la decisión de banear es siempre
-  humana (vía Supabase u otro panel), nunca automática. ethics.py
-  jamás ejecuta un baneo por sí mismo.
+* UBICACIÓN: OmniaMentis/src/core/essence/ethics.py
+* PROPÓSITO: Sistema ético de OmniaMentis — análisis de contenido,
+*            protocolo SILENS, consultas y decisiones de El Fons,
+*            seguimiento de reincidencia, y entrega asíncrona de
+*            resoluciones al usuario final.
+* DEPENDENCIAS: typing, enum, re, datetime, json, pathlib (stdlib)
+* CREADO: 2025-11-15
+* ÚLTIMA MODIFICACIÓN: 2026-06-30
+* ESTADO: Producción
+*
+* CAMBIOS 2026-06-30 (ver GUIA_SESION_2026-06-30.md):
+* - Se agregan get_consultation() y mark_consultation_delivered()
+*   para soportar el endpoint de polling GET /api/chat/resolution/<id>
+*   en main_flask.py. Resuelve el bug donde una decisión del Fons
+*   tomada en fons_panel.html nunca llegaba de vuelta al dashboard
+*   de Stalin (la petición HTTP original ya había cerrado).
+*
+* CAMBIOS 2026-06-19 (ver docs/analisis_silens_fons.md):
+* - Se agrega seguimiento de reincidencia por usuario para contenido
+*   DANGEROUS. SILENS sigue sin censurar: cada consulta individual se
+*   redirige igual que antes (enter_silens_state). Lo nuevo es que, si
+*   el MISMO usuario acumula varias consultas DANGEROUS dentro de una
+*   ventana de tiempo, el sistema genera una nota de auditoría explícita
+*   recomendando revisión de baneo — la decisión de banear es siempre
+*   humana (vía Supabase u otro panel), nunca automática. ethics.py
+*   jamás ejecuta un baneo por sí mismo.
 """
 
 from typing import Dict, List, Optional, Tuple, NamedTuple
@@ -734,6 +748,49 @@ Por favor, espera un momento mientras consulto con mayor sabiduría.
                     self._save_consultations(consultations)
 
         return decision
+
+    def get_consultation(self, consultation_id: str) -> Optional[Dict]:
+        """
+        Busca una consulta por su ID (ETH-XXXX). Solo lectura — no
+        modifica el log ni marca nada como entregado.
+
+        Usado por GET /api/chat/resolution/<consultation_id> en
+        main_flask.py, para que el dashboard de Stalin pueda hacer
+        polling hasta que El Fons resuelva la consulta.
+
+        Args:
+            consultation_id: ID de la consulta (ej. "ETH-0001").
+
+        Returns:
+            Dict con la consulta completa, o None si no existe.
+        """
+        for c in self._load_consultations():
+            if c.get("consultation_id") == consultation_id:
+                return c
+        return None
+
+    def mark_consultation_delivered(self, consultation_id: str, delivered_text: str) -> None:
+        """
+        Marca una consulta como entregada al usuario final, cacheando
+        el texto ya generado.
+
+        Garantiza idempotencia: llamadas repetidas de polling desde el
+        dashboard de Stalin al mismo consultation_id no vuelven a
+        invocar a Ollama ni regeneran contenido — simplemente se sirve
+        el texto ya cacheado en delivered_response.
+
+        Args:
+            consultation_id: ID de la consulta ya resuelta por El Fons.
+            delivered_text: Texto final que se le mostró al usuario.
+        """
+        consultations = self._load_consultations()
+        for c in consultations:
+            if c.get("consultation_id") == consultation_id:
+                c["delivered_to_user"] = True
+                c["delivered_response"] = delivered_text
+                c["delivered_at"] = datetime.now().isoformat()
+                break
+        self._save_consultations(consultations)
 
     def _learn_from_decision(self, user_message: str, guidance: str) -> None:
         learning = {

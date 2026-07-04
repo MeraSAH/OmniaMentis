@@ -101,7 +101,7 @@
         }
     },
     "// ===== CONFIGURACIONES RECOMENDADAS =====": "",
-    "workbench.colorTheme": "Default Dark+",
+    "workbench.colorTheme": "Dark+",
     "workbench.iconTheme": "material-icon-theme",
     "breadcrumbs.enabled": true,
     "problems.showCurrentInStatus": true,

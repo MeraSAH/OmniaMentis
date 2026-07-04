@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<!--
+* UBICACIÓN: OmniaMentis/manifestation/web_interface/fons_login.html
+* PROPÓSITO: Pantalla de autenticación para el panel de moderación de
+*            El Fons. Primera capa de acceso obligatoria antes de
+*            fons_panel.html — sin token válido, fons_panel.html
+*            redirige aquí (ver js/fons_auth_guard.js).
+* DEPENDENCIAS: backend POST /api/auth/login (src/api/main_flask.py)
+* CREADO: 2026-06-30
+* ÚLTIMA MODIFICACIÓN: 2026-06-30
+* ESTADO: Producción
+-->
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EL FONS — ACCESO</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --black: #000000;
+  --bg-panel: #040b18;
+  --bg-card: #071221;
+  --neon-blue: #00c8ff;
+  --text-bright: #e8f4ff;
+  --text-sub: #6a9ab8;
+  --danger: #ff4466;
+  --border: rgba(0,200,255,0.15);
+  --font-mono: 'Courier New', Courier, monospace;
+}
+
+html, body {
+  height: 100%;
+  background: var(--black);
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 32px 28px;
+}
+
+.login-title {
+  color: var(--neon-blue);
+  font-size: 14px;
+  letter-spacing: 0.22em;
+  text-align: center;
+  margin-bottom: 4px;
+  text-shadow: 0 0 10px rgba(0,200,255,0.5);
+}
+
+.login-subtitle {
+  color: var(--text-sub);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-align: center;
+  margin-bottom: 28px;
+}
+
+label {
+  display: block;
+  font-size: 9px;
+  color: var(--text-sub);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+input[type="password"] {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-bright);
+  padding: 10px 12px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  outline: none;
+  margin-bottom: 18px;
+}
+input[type="password"]:focus { border-color: var(--neon-blue); }
+
+button {
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--neon-blue);
+  color: var(--neon-blue);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all .18s;
+}
+button:hover:not(:disabled) {
+  background: var(--neon-blue);
+  color: var(--black);
+}
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.error-msg {
+  color: var(--danger);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-align: center;
+  margin-top: 14px;
+  min-height: 14px;
+}
+
+.api-config { margin-top: 20px; text-align: center; }
+.api-config button {
+  border-color: var(--border);
+  color: var(--text-sub);
+  font-size: 9px;
+  padding: 6px;
+}
+</style>
+</head>
+<body>
+
+<div class="login-card">
+  <div class="login-title">EL FONS</div>
+  <div class="login-subtitle">PANEL DE MODERACIÓN ÉTICA</div>
+
+  <form id="loginForm">
+    <label for="password">Contraseña</label>
+    <input type="password" id="password" autocomplete="current-password" required autofocus>
+    <button type="submit" id="submitBtn">Ingresar</button>
+    <div class="error-msg" id="errorMsg"></div>
+  </form>
+
+  <div class="api-config">
+    <button type="button" id="cfgBtn">⚙ Configurar URL del backend</button>
+  </div>
+</div>
+
+<script>
+function resolveApiUrl() {
+  return localStorage.getItem('omnia_api_url') || 'http://localhost:8000';
+}
+let API = resolveApiUrl();
+
+const form = document.getElementById('loginForm');
+const passwordInput = document.getElementById('password');
+const submitBtn = document.getElementById('submitBtn');
+const errorMsg = document.getElementById('errorMsg');
+const cfgBtn = document.getElementById('cfgBtn');
+
+cfgBtn.addEventListener('click', () => {
+  const value = prompt('URL del backend (https://...)', API);
+  if (value) {
+    API = value.trim().replace(/\/$/, '');
+    localStorage.setItem('omnia_api_url', API);
+  }
+});
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  errorMsg.textContent = '';
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Verificando...';
+
+  try {
+    const r = await fetch(`${API}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: passwordInput.value }),
+      signal: AbortSignal.timeout(8000),
+    });
+
+    const d = await r.json();
+
+    if (!r.ok) {
+      errorMsg.textContent = d.error || 'Contraseña incorrecta';
+      passwordInput.value = '';
+      passwordInput.focus();
+      return;
+    }
+
+    // sessionStorage (no localStorage): el token expira al cerrar la
+    // pestaña, reduciendo la ventana de exposición de una sesión de
+    // moderación olvidada abierta en una máquina compartida.
+    sessionStorage.setItem('fons_token', d.token);
+    sessionStorage.setItem('fons_token_expires_at', String(Date.now() + d.expires_in * 1000));
+    window.location.href = 'fons_panel.html';
+
+  } catch (err) {
+    errorMsg.textContent = `Error de conexión: ${err.message}`;
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Ingresar';
+  }
+});
+</script>
+</body>
+</html>

@@ -212,7 +212,8 @@ class TestKeywordRouter:
     def test_scores_dict_contains_all_registered_modules(self, router, context):
         result = router.route("cualquier mensaje", context)
         expected_names = {
-            "NutriVida", "OmniaAthletics", "Corporal Verified", "OmniaHabits"
+            "NutriVida", "OmniaAthletics", "Corporal Verified", "OmniaHabits",
+            "OmniaChronos", "OmniaForge", "OmniaStudio", "OmniaEngine", "OmniaCore"
         }
         assert set(result.scores.keys()) == expected_names
 

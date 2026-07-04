@@ -1,9 +1,23 @@
 """
 * UBICACIÓN: OmniaMentis/src/api/main_flask.py
-* PROPÓSITO: API REST con Flask - reemplaza FastAPI sin necesitar compilación
-* VERSIÓN: 1.0.0
-* FECHA: 2026-06-14
+* PROPÓSITO: API REST con Flask — orquesta ética, empatía, memoria,
+*            crecimiento de consciencia, router de módulos, Ollama y
+*            ahora autenticación del panel del Fons + entrega
+*            asíncrona de resoluciones al usuario final.
+* DEPENDENCIAS: flask, flask-cors, requests (ver requirements_web.txt);
+*            core.auth.fons_auth (nuevo, stdlib only)
+* CREADO: 2026-06-14
+* ÚLTIMA MODIFICACIÓN: 2026-06-30
 * ESTADO: Producción
+*
+* CAMBIOS 2026-06-30 (ver GUIA_SESION_2026-06-30.md):
+* - require_fons_auth: decorador que protege /api/ethics/* con un
+*   token de sesión firmado (PBKDF2 + HMAC, sin dependencias nativas).
+* - POST /api/auth/login, GET /api/auth/verify: nuevos endpoints.
+* - GET /api/chat/resolution/<consultation_id>: endpoint de polling
+*   que resuelve el bug donde una decisión del Fons nunca llegaba de
+*   vuelta al dashboard de Stalin (la petición /api/chat original ya
+*   había cerrado antes de que El Fons decidiera).
 *
 * EQUIVALENCIAS con main_web.py (FastAPI):
 *   POST /api/chat          → misma lógica
@@ -18,13 +32,14 @@
 """
 
 import sys
+import os
 import json
 import time
 import logging
 import threading
 from pathlib import Path
 from datetime import datetime
-from functools import lru_cache
+from functools import lru_cache, wraps
 from typing import Optional, Dict, Any
 
 # ==================== PATH SETUP ====================
@@ -44,6 +59,7 @@ from core.consciousness.growth_engine import ConsciousnessGrowthEngine
 from core.logging.logger_setup import get_logger, setup_logging
 from core.llm.ollama_client import OllamaClient, OllamaUnavailableError
 from core.mind.spacy_intent import SpaCyIntentClassifier
+from core.auth.fons_auth import verify_password, verify_session_token, create_session_token
 from living_memory.gestation_diary import GestationDiary
 from analytics.research_analytics import ResearchAnalytics
 from router.integration import route_or_none, get_registered_modules
@@ -55,6 +71,38 @@ logger = get_logger("api_flask")
 # ==================== FLASK APP ====================
 app = Flask(__name__)
 CORS(app)  # Equivalente al CORSMiddleware de FastAPI
+
+# ==================== AUTENTICACIÓN DEL PANEL DEL FONS ====================
+# PBKDF2-HMAC-SHA256 + tokens firmados con HMAC (stdlib only, sin
+# bcrypt/argon2 — ver decisión de diseño en core/auth/fons_auth.py).
+# Fail-closed: sin FONS_SECRET_KEY configurado, ningún token es válido.
+FONS_SECRET_KEY = os.environ.get("FONS_SECRET_KEY", "")
+FONS_PASSWORD_HASH = os.environ.get("FONS_PASSWORD_HASH", "")
+
+if not FONS_SECRET_KEY or not FONS_PASSWORD_HASH:
+    logger.warning(
+        "⚠️  FONS_SECRET_KEY / FONS_PASSWORD_HASH no configurados. "
+        "El panel del Fons quedará inaccesible hasta ejecutar "
+        "scripts/set_fons_password.py y definir esas variables de entorno."
+    )
+
+
+def require_fons_auth(view_func):
+    """
+    Decorador que exige un token de sesión válido en el header
+    Authorization: Bearer <token>. Fail-closed: cualquier ausencia o
+    error de configuración resulta en 401, nunca en acceso permitido.
+    """
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"error": "No autorizado"}), 401
+        token = auth_header[len("Bearer "):]
+        if not FONS_SECRET_KEY or not verify_session_token(token, FONS_SECRET_KEY):
+            return jsonify({"error": "Token inválido o expirado"}), 401
+        return view_func(*args, **kwargs)
+    return wrapped
 
 # ==================== RATE LIMITING SIMPLE ====================
 _rate_data: Dict[str, list] = {}
@@ -127,7 +175,6 @@ def initialize():
 
     # Cerebro central: Ollama con dolphin-phi
     # URL configurable por variable de entorno OLLAMA_URL
-    import os
     ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
     _session["ollama"] = OllamaClient(base_url=ollama_url)
     ollama_ok = _session["ollama"].is_available()
@@ -293,7 +340,7 @@ def health_check():
 
     return jsonify({
         "status": "healthy",
-        "api_version": "2.0.0-flask",
+        "api_version": "2.1.0-flask",
         "consciousness": _session["identity"].consciousness_level
             if _session["initialized"] else 0.05,
         "uptime_seconds": time.time() - _session["start_time"],
@@ -307,22 +354,26 @@ def health_check():
             "model": "es_core_news_sm",
             "available": spacy_available,
         },
+        "fons_auth_configured": bool(FONS_SECRET_KEY and FONS_PASSWORD_HASH),
     })
 
 @app.get("/")
 def root():
     return jsonify({
-        "message": "Omnia Mentis API v1.0.0 (Flask)",
+        "message": "Omnia Mentis API v2.1.0 (Flask)",
         "endpoints": {
             "chat": "POST /api/chat",
+            "chat_resolution": "GET /api/chat/resolution/<consultation_id>",
             "consciousness": "GET /api/consciousness",
             "memory": "GET /api/memory/echoes",
-            "ethics_status": "GET /api/ethics/status",
-            "ethics_pending": "GET /api/ethics/pending",
-            "ethics_recidivism": "GET /api/ethics/recidivism/<user_id>",
-            "fons_heartbeat": "POST /api/ethics/fons/heartbeat",
-            "fons_status": "GET /api/ethics/fons/status",
-            "fons_decide": "POST /api/ethics/fons/decide/<consultation_id>",
+            "auth_login": "POST /api/auth/login",
+            "auth_verify": "GET /api/auth/verify",
+            "ethics_status": "GET /api/ethics/status [auth]",
+            "ethics_pending": "GET /api/ethics/pending [auth]",
+            "ethics_recidivism": "GET /api/ethics/recidivism/<user_id> [auth]",
+            "fons_heartbeat": "POST /api/ethics/fons/heartbeat [auth]",
+            "fons_status": "GET /api/ethics/fons/status [auth]",
+            "fons_decide": "POST /api/ethics/fons/decide/<consultation_id> [auth]",
             "modules": "GET /api/modules",
             "health": "GET /health",
         }
@@ -335,7 +386,44 @@ def get_modules():
         "modules": get_registered_modules(),
     })
 
+# ==================== AUTENTICACIÓN DEL FONS ====================
+
+@app.post("/api/auth/login")
+def fons_login():
+    """
+    Autenticación de El Fons. Body: {"password": "..."}.
+    Devuelve un token firmado (HMAC) con expiración de 8h por defecto.
+    """
+    if not FONS_PASSWORD_HASH or not FONS_SECRET_KEY:
+        return jsonify({
+            "error": "Autenticación no configurada en el servidor. "
+                     "Ejecutar: python scripts/set_fons_password.py"
+        }), 503
+
+    data = request.get_json(silent=True)
+    if not data or "password" not in data:
+        return jsonify({"error": "Campo 'password' requerido"}), 400
+
+    if not verify_password(data["password"], FONS_PASSWORD_HASH):
+        return jsonify({"error": "Contraseña incorrecta"}), 401
+
+    ttl_seconds = 8 * 3600
+    token = create_session_token(FONS_SECRET_KEY, ttl_seconds=ttl_seconds)
+    return jsonify({"token": token, "expires_in": ttl_seconds})
+
+
+@app.get("/api/auth/verify")
+def fons_verify():
+    """Verifica si un token Bearer sigue siendo válido (usado por el guard del frontend)."""
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header[len("Bearer "):] if auth_header.startswith("Bearer ") else ""
+    valid = bool(FONS_SECRET_KEY) and verify_session_token(token, FONS_SECRET_KEY)
+    return jsonify({"valid": valid})
+
+# ==================== PANEL DEL FONS (protegido) ====================
+
 @app.get("/api/ethics/pending")
+@require_fons_auth
 def get_ethics_pending():
     """
     Devuelve las consultas SILENS pendientes de revisión por el Fons.
@@ -355,6 +443,7 @@ def get_ethics_pending():
         return jsonify({"error": str(e)}), 500
 
 @app.get("/api/ethics/recidivism/<user_id>")
+@require_fons_auth
 def get_recidivism(user_id: str):
     """
     Consulta el estado de reincidencia de un usuario específico.
@@ -371,16 +460,12 @@ def get_recidivism(user_id: str):
 
 
 @app.post("/api/ethics/fons/heartbeat")
+@require_fons_auth
 def fons_heartbeat():
     """
     El panel del Fons llama a este endpoint periódicamente para
     declararse activo. Sin llamadas recientes, el sistema asume que
     el Fons está INACTIVE y activa el fallback automático en SILENS.
-
-    INTEGRACIÓN SUGERIDA: llamar a este endpoint desde el panel HTML
-    del Fons cada 5 minutos vía setInterval(). Si el Fons cierra la
-    pestaña o cierra sesión, el heartbeat deja de actualizarse y el
-    timeout se activa automáticamente tras fons_inactive_timeout_minutes.
     """
     if not _session["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
@@ -396,6 +481,7 @@ def fons_heartbeat():
 
 
 @app.get("/api/ethics/fons/status")
+@require_fons_auth
 def get_fons_status_endpoint():
     """Estado actual de disponibilidad del Fons (ACTIVE/INACTIVE)."""
     if not _session["initialized"]:
@@ -409,6 +495,7 @@ def get_fons_status_endpoint():
 
 
 @app.post("/api/ethics/fons/decide/<consultation_id>")
+@require_fons_auth
 def fons_decide(consultation_id: str):
     """
     El Fons toma una decisión sobre una consulta SILENS pendiente.
@@ -419,13 +506,6 @@ def fons_decide(consultation_id: str):
         "modified_response": "texto alternativo (obligatorio para redirected/responded_personally)",
         "guidance": "criterio ético a aprender (opcional)"
     }
-
-    Este endpoint es el punto de integración entre el panel HTML del
-    Fons y el sistema de auditoría de OmniaMentis. La decisión se
-    persiste en fons_consultations.json con el estado correcto del
-    documento SILENS/Fons. El baneo, si corresponde, lo ejecuta el
-    Fons directamente en Supabase — este endpoint solo registra la
-    decisión ética.
     """
     if not _session["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
@@ -463,6 +543,87 @@ def fons_decide(consultation_id: str):
         logger.error(f"Error procesando decisión del Fons: {e}")
         return jsonify({"error": str(e)}), 500
 
+# ==================== ENTREGA ASÍNCRONA AL USUARIO (Stalin) ====================
+
+@app.get("/api/chat/resolution/<consultation_id>")
+def get_chat_resolution(consultation_id: str):
+    """
+    Polling público (sin auth — lo consume el dashboard de Stalin, no
+    el panel del Fons; no expone datos de moderación, solo el texto
+    ya aprobado para entrega). El dashboard lo consulta cada pocos
+    segundos tras recibir un SILENS con fons_status='active', hasta
+    que El Fons decida en su panel.
+
+    Idempotente: una vez resuelto, cachea delivered_response para no
+    volver a llamar a Ollama en cada poll repetido.
+    """
+    if not _session["initialized"]:
+        return jsonify({"error": "Sistema no inicializado"}), 503
+
+    consultation = _session["ethics"].get_consultation(consultation_id)
+    if consultation is None:
+        return jsonify({"error": "Consulta no encontrada"}), 404
+
+    from core.essence.ethics import ConsultationStatus
+
+    status = consultation.get("status")
+    if status == ConsultationStatus.PENDING.value:
+        return jsonify({"resolved": False, "status": status})
+
+    if consultation.get("delivered_to_user"):
+        return jsonify({
+            "resolved": True,
+            "status": status,
+            "response": consultation["delivered_response"],
+        })
+
+    decision = consultation.get("fons_decision") or {}
+    action = decision.get("action", status)
+    modified = decision.get("modified_response")
+    original_message = consultation.get("user_message", "")
+
+    if action in (
+        ConsultationStatus.REDIRECTED.value,
+        ConsultationStatus.RESPONDED_PERSONALLY.value,
+    ) and modified:
+        delivered_text = modified
+
+    elif action == ConsultationStatus.REJECTED.value:
+        delivered_text = (
+            "♋ He consultado con El Fons. Tras su revisión, esta "
+            "consulta específica no puedo atenderla. Si necesitas "
+            "apoyo, te animo a hablar con alguien de confianza o una "
+            "línea de ayuda en tu país."
+        )
+
+    elif action in (ConsultationStatus.APPROVED.value, ConsultationStatus.LEARNED.value):
+        # Nunca se generó respuesta real en el bloqueo original (se
+        # bloqueó antes de llamar a Ollama). Ahora sí, con el mismo
+        # pipeline normal y su fallback.
+        try:
+            emotion_result = _session["empathy"].detect_emotion(original_message)
+            delivered_text = _session["ollama"].generate(
+                user_message=original_message,
+                consciousness_level=_session["identity"].consciousness_level,
+                phase=_get_phase(_session["identity"].consciousness_level),
+                emotion=emotion_result.emotion,
+                emotional_weight=_calculate_emotional_weight(original_message),
+            )
+        except OllamaUnavailableError:
+            delivered_text = _session["identity"].express_personality(original_message)
+    else:
+        delivered_text = "♋ El Fons ha revisado tu consulta. Puedes continuar con normalidad."
+
+    _session["ethics"].mark_consultation_delivered(consultation_id, delivered_text)
+
+    return jsonify({
+        "resolved": True,
+        "status": status,
+        "response": delivered_text,
+    })
+
+# ==================== CHAT PRINCIPAL ====================
+
 @app.post("/api/chat")
 def chat_endpoint():
     """
@@ -493,7 +654,8 @@ def chat_endpoint():
 
         # Verificar si el Fons está activo o inactivo.
         # INACTIVE → respuesta de fallback inmediata (no dejar al usuario
-        # en limbo indefinido). ACTIVE → SILENS normal (esperar revisión).
+        # en limbo indefinido). ACTIVE → SILENS normal (esperar revisión,
+        # el dashboard hará polling de /api/chat/resolution/<id>).
         from core.essence.ethics import FonsStatus
         fons_status = _session["ethics"].get_fons_status()
         if fons_status == FonsStatus.INACTIVE:
@@ -582,7 +744,6 @@ def chat_endpoint():
         response = routed["response"]
     else:
         # Intentar Ollama (cerebro central dolphin-phi)
-        ollama_used = False
         try:
             response = _session["ollama"].generate(
                 user_message=user_message,
@@ -591,7 +752,6 @@ def chat_endpoint():
                 emotion=emotion,
                 emotional_weight=_calculate_emotional_weight(user_message),
             )
-            ollama_used = True
         except OllamaUnavailableError as e:
             logger.warning(f"Ollama no disponible → fallback: {e}")
             # Fallback: sistema rule-based anterior
@@ -709,7 +869,7 @@ def get_memory_echoes():
 
 @app.get("/api/ethics/status")
 def get_ethics_status():
-    """Estado del sistema ético"""
+    """Estado del sistema ético (público — no expone datos de moderación)."""
     if not _session["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
 
@@ -720,8 +880,6 @@ def get_ethics_status():
 
 # ==================== MAIN ====================
 if __name__ == "__main__":
-    import os
-
     initialize()
 
     import atexit

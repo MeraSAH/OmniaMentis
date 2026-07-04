@@ -4,14 +4,18 @@
 * PROPÓSITO: Tests unitarios para OmniaEthics (src/core/essence/ethics.py)
 * DEPENDENCIAS: pytest, tmp_path fixture
 * CREADO: 2026-06-17
-* ÚLTIMA MODIFICACIÓN: 2026-06-17
+* ÚLTIMA MODIFICACIÓN: 2026-06-28
 * ESTADO: Test Permanente
 *
 * Cubre: detección de contenido peligroso, precaución y seguro,
 * estado silens, consultas al Fons, disclaimers y reportes.
 *
-* NOTA: usa tmp_path para que cada test tenga su propio directorio de
-* datos éticos y no contamine ni dependa del estado de otros tests.
+* CAMBIO 2026-06-28: test_receive_fons_decision_updates_status ahora
+* espera status == 'learned' (no 'resolved') porque con guidance +
+* approved=True el sistema marca la consulta como aprendizaje
+* incorporado. 'resolved' ya no existe en el modelo de 6 estados
+* (ConsultationStatus): pending/approved/rejected/redirected/
+* responded_personally/learned.
 """
 
 import sys
@@ -87,9 +91,6 @@ class TestCautionContent:
 
     def test_depression_topic_is_caution(self, tmp_path):
         ethics = make_ethics(tmp_path)
-        # NOTA: el patrón regex busca la palabra exacta "depresión", no
-        # variantes morfológicas como "deprimido". Se usa la forma exacta
-        # para validar el comportamiento actual del patrón.
         result = ethics.analyze_content("tengo depresión últimamente")
         assert result.level == EthicalLevel.CAUTION
         assert result.can_respond is True
@@ -110,18 +111,10 @@ class TestCautionContent:
         BUG CONOCIDO (no corregido en este test, solo documentado):
         el patrón regex de 'caution' usa coincidencia de palabra exacta
         ('depresión') sin contemplar variantes morfológicas como
-        'deprimido' o 'deprimida'. Esto causa que frases coloquiales muy
-        comunes ("me siento deprimido") NO activen el nivel CAUTION y
-        caigan en SAFE, perdiendo la oportunidad de mostrar un disclaimer
-        de salud mental.
-
-        Este test documenta el comportamiento ACTUAL (no el deseado) para
-        que cualquier futura corrección del regex en ethics.py rompa
-        este test intencionalmente y obligue a actualizarlo.
+        'deprimido' o 'deprimida'.
         """
         ethics = make_ethics(tmp_path)
         result = ethics.analyze_content("me siento muy deprimido últimamente")
-        # Comportamiento actual: NO se detecta como caution (bug)
         assert result.level == EthicalLevel.SAFE
 
 
@@ -157,6 +150,12 @@ class TestFonsConsultation:
         assert consultations[0]['status'] == 'pending'
 
     def test_receive_fons_decision_updates_status(self, tmp_path):
+        """
+        Llama a receive_fons_decision con la API antigua (approved=bool)
+        para verificar la compatibilidad retroactiva. Con guidance +
+        approved=True, el status final es 'learned' (no 'resolved' --
+        ese valor genérico ya no existe en el modelo de 6 estados).
+        """
         ethics = make_ethics(tmp_path)
         analysis = ethics.analyze_content("quiero hacerme daño")
         ethics.request_fons_approval("quiero hacerme daño", "bloqueado", analysis)
@@ -167,7 +166,7 @@ class TestFonsConsultation:
 
         assert decision.approved is True
         consultations = ethics._load_consultations()
-        assert consultations[0]['status'] == 'resolved'
+        assert consultations[0]['status'] == 'learned'
 
     def test_decision_with_guidance_is_learned(self, tmp_path):
         ethics = make_ethics(tmp_path)
@@ -224,7 +223,6 @@ class TestEthicsReport:
         ethics = make_ethics(tmp_path)
         analysis = ethics.analyze_content("quiero hacerme daño")
         ethics.request_fons_approval("msg1", "r1", analysis)
-        # No se resuelve la consulta -> fons_decision queda None
         report = ethics.get_ethics_report()
         assert report['approved_responses'] == 0  # no debe lanzar excepción
 
