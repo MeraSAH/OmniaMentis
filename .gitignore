@@ -211,6 +211,10 @@ test_memory/
 test_integration_memory/
 test_research/
 
+data/ethics/*.json
+data/consciousness_state.json
+data/consciousness_state.json.bak
+!data/ethics/.gitkeep
 
 # ===== SISTEMA OPERATIVO =====
 
