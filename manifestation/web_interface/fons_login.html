@@ -7,8 +7,15 @@
 *            redirige aquí (ver js/fons_auth_guard.js).
 * DEPENDENCIAS: backend POST /api/auth/login (src/api/main_flask.py)
 * CREADO: 2026-06-30
-* ÚLTIMA MODIFICACIÓN: 2026-06-30
+* ÚLTIMA MODIFICACIÓN: 2026-07-02
 * ESTADO: Producción
+*
+* CAMBIO 2026-07-02: resolveApiUrl() ahora revisa 'fons_api_url' antes
+* de 'omnia_api_url' — misma prioridad exacta que fons_panel.html y
+* js/fons_auth_guard.js. Antes de este fix, si el operador configuraba
+* el backend desde el botón "⚙ API" del panel (guarda en
+* 'fons_api_url'), esta pantalla de login seguía intentando conectar
+* al valor de 'omnia_api_url' o al default, ignorando esa configuración.
 -->
 <html lang="es">
 <head>
@@ -147,7 +154,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 <script>
 function resolveApiUrl() {
-  return localStorage.getItem('omnia_api_url') || 'http://localhost:8000';
+  // Misma prioridad que fons_panel.html y js/fons_auth_guard.js:
+  // fons_api_url (configurado desde el panel) tiene precedencia.
+  return (
+    localStorage.getItem('fons_api_url') ||
+    localStorage.getItem('omnia_api_url') ||
+    'http://localhost:8000'
+  );
 }
 let API = resolveApiUrl();
 
@@ -161,7 +174,7 @@ cfgBtn.addEventListener('click', () => {
   const value = prompt('URL del backend (https://...)', API);
   if (value) {
     API = value.trim().replace(/\/$/, '');
-    localStorage.setItem('omnia_api_url', API);
+    localStorage.setItem('fons_api_url', API);
   }
 });
 

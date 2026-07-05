@@ -9,8 +9,16 @@
  * DEPENDENCIAS: fons_login.html, backend /api/ethics/* protegido con
  *            @require_fons_auth (src/api/main_flask.py)
  * CREADO: 2026-06-30
- * ÚLTIMA MODIFICACIÓN: 2026-06-30
+ * ÚLTIMA MODIFICACIÓN: 2026-07-02
  * ESTADO: Producción
+ *
+ * CAMBIO 2026-07-02: resolveApiUrl() ahora revisa 'fons_api_url' antes
+ * de 'omnia_api_url', para que coincida exactamente con la prioridad
+ * que usa fons_panel.html en su propio resolveApiUrl(). Antes de este
+ * fix, si un operador reconfiguraba el backend desde el botón "⚙ API"
+ * del panel (que guarda en 'fons_api_url'), fonsFetch() seguía
+ * ignorando ese cambio y apuntando a 'omnia_api_url' o al default —
+ * los dos mecanismos quedaban desincronizados silenciosamente.
  *
  * USO en fons_panel.html:
  *   1. Agregar <script src="js/fons_auth_guard.js"></script> como
@@ -49,7 +57,14 @@
   }
 
   function resolveApiUrl() {
-    return localStorage.getItem('omnia_api_url') || 'http://localhost:8000';
+    // Misma prioridad que fons_panel.html: fons_api_url (configurado
+    // desde el propio panel) tiene precedencia sobre omnia_api_url
+    // (configurado desde el dashboard de Stalin o fons_login.html).
+    return (
+      localStorage.getItem('fons_api_url') ||
+      localStorage.getItem('omnia_api_url') ||
+      'http://localhost:8000'
+    );
   }
 
   window.fonsFetch = async function fonsFetch(path, options = {}) {

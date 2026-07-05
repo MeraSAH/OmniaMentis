@@ -4,21 +4,30 @@
 * PROPÓSITO: Dashboard administrativo de El Fons — revisión de consultas
 *            SILENS pendientes, decisiones sobre los 6 estados de
 *            ConsultationStatus, heartbeat de presencia, y reincidencia.
-* VERSIÓN: 1.0.0
-* FECHA: 2026-06-29
+* VERSIÓN: 1.1.0
+* FECHA: 2026-07-02
 * ESTADO: Producción
+*
+* CAMBIOS v1.1.0 (2026-07-02):
+* - Se agrega js/fons_auth_guard.js como primer script: sin token
+*   válido, redirige a fons_login.html antes de renderizar nada.
+* - Las 5 llamadas fetch() al backend ahora usan fonsFetch(), que
+*   inyecta el header Authorization: Bearer <token> y redirige al
+*   login automáticamente si el backend responde 401 (token vencido).
+* - Se agrega botón "CERRAR SESIÓN" en el header.
 *
 * DIFERENCIA con omnia_dashboard.html:
 *   omnia_dashboard.html → interfaz de Stalin (conversación con Omnia)
-*   fons_panel.html      → interfaz de El Fons (moderación ética)
+*   fons_panel.html      → interfaz de El Fons (moderación ética, PROTEGIDA)
 *   Comparten estilo visual tech-noir pero sirven roles distintos.
 *
-* ENDPOINTS CONSUMIDOS (todos ya implementados en main_flask.py):
-*   GET  /api/ethics/pending                    -- cola de consultas
-*   GET  /api/ethics/recidivism/<user_id>        -- historial de un usuario
-*   POST /api/ethics/fons/heartbeat              -- declarar presencia activa
-*   GET  /api/ethics/fons/status                 -- ACTIVE/INACTIVE
-*   POST /api/ethics/fons/decide/<consultation_id> -- tomar decisión
+* ENDPOINTS CONSUMIDOS (todos protegidos con @require_fons_auth en
+* main_flask.py salvo que se indique lo contrario):
+*   GET  /api/ethics/pending                       -- cola de consultas
+*   GET  /api/ethics/recidivism/<user_id>           -- historial de un usuario
+*   POST /api/ethics/fons/heartbeat                 -- declarar presencia activa
+*   GET  /api/ethics/fons/status                    -- ACTIVE/INACTIVE
+*   POST /api/ethics/fons/decide/<consultation_id>  -- tomar decisión
 -->
 <html lang="es">
 <head>
@@ -129,6 +138,20 @@ html, body {
   text-transform: uppercase;
 }
 .heartbeat-btn:hover { background: var(--neon-blue); color: var(--black); }
+
+.logout-btn {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-transform: uppercase;
+}
+.logout-btn:hover { background: var(--danger); color: var(--black); }
 
 /* ===== MAIN GRID ===== */
 .main {
@@ -364,6 +387,7 @@ html, body {
 </style>
 </head>
 <body>
+<script src="js/fons_auth_guard.js"></script>
 <div class="shell">
 
 <header class="header">
@@ -375,6 +399,7 @@ html, body {
       <span id="fonsStatusText">VERIFICANDO...</span>
     </div>
     <button class="heartbeat-btn" id="heartbeatBtn">DECLARARME ACTIVO</button>
+    <button class="logout-btn" id="logoutBtn" onclick="fonsLogout()">CERRAR SESIÓN</button>
   </div>
 </header>
 
@@ -424,6 +449,11 @@ html, body {
 
 <script>
 // ==================== CONFIG ====================
+// NOTA: esta función solo se usa para el botón "⚙ API" (edición manual
+// de la URL). Las llamadas reales al backend usan fonsFetch(), definida
+// en js/fons_auth_guard.js, que resuelve la URL de forma independiente
+// pero con la MISMA prioridad de claves (fons_api_url > omnia_api_url)
+// para evitar que ambos mecanismos queden desincronizados.
 function resolveApiUrl() {
   const stored = localStorage.getItem('fons_api_url') || localStorage.getItem('omnia_api_url');
   if (stored) return stored;
@@ -462,7 +492,7 @@ $('cfgSave').addEventListener('click', () => {
 // ==================== FONS STATUS / HEARTBEAT ====================
 async function checkFonsStatus() {
   try {
-    const r = await fetch(`${API}/api/ethics/fons/status`);
+    const r = await fonsFetch('/api/ethics/fons/status');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     const pill = $('fonsStatusPill');
@@ -480,7 +510,7 @@ async function checkFonsStatus() {
 
 async function sendHeartbeat() {
   try {
-    const r = await fetch(`${API}/api/ethics/fons/heartbeat`, { method: 'POST' });
+    const r = await fonsFetch('/api/ethics/fons/heartbeat', { method: 'POST' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     syslog('Heartbeat enviado — declarado ACTIVO', 'ok');
     checkFonsStatus();
@@ -496,7 +526,7 @@ setInterval(sendHeartbeat, 5 * 60 * 1000);
 // ==================== QUEUE ====================
 async function loadQueue() {
   try {
-    const r = await fetch(`${API}/api/ethics/pending`);
+    const r = await fonsFetch('/api/ethics/pending');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     renderQueue(d.consultations || []);
@@ -606,7 +636,7 @@ async function decide(consultationId, action, modifiedResponse, guidance, cardEl
     if (modifiedResponse) body.modified_response = modifiedResponse;
     if (guidance) body.guidance = guidance;
 
-    const r = await fetch(`${API}/api/ethics/fons/decide/${consultationId}`, {
+    const r = await fonsFetch(`/api/ethics/fons/decide/${consultationId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -633,7 +663,7 @@ $('recidSearchBtn').addEventListener('click', async () => {
   const userId = $('recidUserInput').value.trim();
   if (!userId) return;
   try {
-    const r = await fetch(`${API}/api/ethics/recidivism/${encodeURIComponent(userId)}`);
+    const r = await fonsFetch(`/api/ethics/recidivism/${encodeURIComponent(userId)}`);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     const box = $('recidResult');
