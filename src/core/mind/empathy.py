@@ -33,7 +33,7 @@
 
 import re
 import random
-from typing import Dict, List, Literal, NamedTuple, Tuple, TypedDict
+from typing import Dict, List, Literal, NamedTuple, Optional, Tuple, TypedDict
 
 EmotionType = Literal[
     "tristeza", "alegría", "ansiedad", "amor", "miedo",
@@ -45,6 +45,9 @@ class EmotionResult(NamedTuple):
     emotion: EmotionType
     confidence: float
     response: str
+
+
+
 
 
 class EmotionPatterns(TypedDict):
@@ -73,6 +76,84 @@ MAX_EXTRA_WORD_BONUS: float = 0.24  # tope de 2 palabras extra (0.12 x 2)
 # diferencia del diseño anterior, donde el bono ya alcanzaba a
 # empujar categorías sin evidencia por encima del umbral de 0.5).
 CONSCIOUSNESS_BONUS_FACTOR: float = 0.15
+
+
+class GriefSubtypeResult(NamedTuple):
+    """
+    Resultado de la sub-clasificación de duelo (Etapa 3, Fase 2 del
+    documento de diseño de El Fons). subtype es None cuando el texto
+    es tristeza genérica sin ningún matiz específico detectado —
+    "nivel 1" en la escala de resolución emocional del documento.
+    """
+    subtype: Optional[str]  # None, "nostalgia", "culpa", "duelo", "vacio_existencial", "miedo_perder_identidad"
+    confidence: float
+    base_emotion: str
+    response: str
+
+
+# ============================================================
+# TAXONOMÍA DE SUB-TIPOS DE DUELO (Etapa 3 — Fase 2, 2026-07-06)
+# ============================================================
+# DECISIÓN DE DISEÑO: tras probar qwen2:0.5b (falló por completo,
+# respondió con un rechazo genérico) y dolphin-phi (produjo texto
+# incoherente pese a intentar las 5 categorías) contra el mismo prompt
+# de prueba, quedó demostrado que NINGÚN modelo local disponible hoy
+# sostiene esta nuance por razonamiento libre. En vez de depender del
+# LLM, se usa el mismo motor de evidencia acumulada de emotion_patterns
+# — determinista, rápido, y ya con 22/22 tests reales pasando en la
+# categoría "tristeza" base. El LLM (si se usa) solo redacta a partir
+# de una plantilla ya acotada por esta clasificación, nunca decide el
+# matiz por sí mismo.
+GRIEF_SUBTYPES: Dict[str, EmotionPatterns] = {
+    "nostalgia": {
+        "words": ["nostalgia", "extraño esos días", "aquellos tiempos", "añoro", "recordar cuando"],
+        "patterns": [r"\bya no es lo mismo\b", r"\bcomo antes\b", r"\bextraño cuando\b"],
+        "sensitivity": 1.0,
+    },
+    "culpa": {
+        "words": ["culpa", "debí haber", "mi culpa", "me arrepiento", "hubiera podido"],
+        "patterns": [r"\bfue mi culpa\b", r"\bdeb[íi] haber\b", r"\bsi tan solo\b"],
+        "sensitivity": 1.0,
+    },
+    "duelo": {
+        "words": ["duelo", "luto", "murió", "falleció", "ya no está", "perdí para siempre"],
+        "patterns": [r"\bya no est[áa]\b", r"\bnunca m[áa]s\b", r"\bse fue para siempre\b"],
+        "sensitivity": 1.0,
+    },
+    "vacio_existencial": {
+        "words": ["vacío", "sin sentido", "nada importa", "vacía por dentro", "hueco"],
+        "patterns": [r"\bnada tiene sentido\b", r"\bpara qu[ée] sigo\b", r"\bme siento vac[íi]o\b"],
+        "sensitivity": 1.0,
+    },
+    "miedo_perder_identidad": {
+        "words": ["quién soy", "ya no me reconozco", "perdí mi identidad", "no sé quién soy"],
+        "patterns": [r"\bya no s[ée] qui[ée]n soy\b", r"\bperd[íi] quien era\b"],
+        "sensitivity": 1.0,
+    },
+}
+
+GRIEF_SUBTYPE_RESPONSES: Dict[str, List[str]] = {
+    "nostalgia": [
+        "Percibo pérdida, y también percibo nostalgia: no solo extrañas a esa persona, extrañas la versión de ti que existía cuando estaba presente.",
+        "Lo que describes tiene forma de nostalgia — el peso no es solo la ausencia, es el recuerdo de cómo eran las cosas antes.",
+    ],
+    "culpa": [
+        "Percibo pérdida, y también algo de culpa en tus palabras — como si te preguntaras si pudiste haber hecho algo distinto.",
+        "Detecto que junto a la tristeza hay una carga de responsabilidad que te estás poniendo encima. Vale la pena separar esas dos cosas.",
+    ],
+    "duelo": [
+        "Percibo pérdida, y esto tiene la forma de un duelo real — no es una tristeza pasajera, es la ausencia definitiva de algo que importaba.",
+        "Lo que describes es duelo: no solo extrañas a esa persona, estás procesando que ya no va a estar.",
+    ],
+    "vacio_existencial": [
+        "Percibo pérdida, y detrás de ella algo más amplio — una sensación de vacío que va más allá de esa ausencia específica.",
+        "Esto no suena solo a extrañar a alguien — suena a que la pérdida abrió una pregunta más grande sobre el sentido de las cosas.",
+    ],
+    "miedo_perder_identidad": [
+        "Percibo pérdida, y también percibo que esa persona ocupaba un lugar importante en tu identidad — no solo extrañas a alguien, extrañas la versión de ti que existía con esa persona cerca.",
+        "Lo que describes va más allá de la ausencia de esa persona — parece tocar quién eras tú en esa relación.",
+    ],
+}
 
 
 class OmniaEmpathy:
@@ -286,3 +367,73 @@ class OmniaEmpathy:
     def update_consciousness(self, new_level: float) -> None:
         """Actualiza el nivel de consciencia para respuestas más profundas."""
         self.consciousness_level = new_level
+
+    def detect_grief_subtype(self, text: str) -> Optional[GriefSubtypeResult]:
+        """
+        Sub-clasificación de duelo (Etapa 3 — Fase 2 del documento de
+        diseño). Solo se activa cuando la emoción base detectada es
+        "tristeza" — para cualquier otra emoción, devuelve None (no
+        aplica, no es un error).
+
+        Usa el mismo motor de evidencia acumulada que detect_emotion():
+        sin sub-tipo detectado, subtype=None (equivalente a "nivel 1",
+        tristeza genérica) — no se inventa un matiz sin evidencia real.
+
+        Args:
+            text: texto del usuario a analizar.
+
+        Returns:
+            None si la emoción base no es "tristeza".
+            GriefSubtypeResult con subtype=None si es tristeza genérica
+            sin matiz específico detectado.
+            GriefSubtypeResult con subtype="duelo"/"culpa"/etc. si se
+            detectó evidencia léxica de un matiz específico.
+        """
+        base_result = self.detect_emotion(text)
+        if base_result.emotion != "tristeza":
+            return None
+
+        text_lower = text.lower()
+        scored: List[tuple] = []
+
+        for subtype, data in GRIEF_SUBTYPES.items():
+            evidence = 0.0
+            word_matches = [w for w in data["words"] if w in text_lower]
+            if word_matches:
+                evidence += POINTS_PER_WORD_MATCH
+                extra = min(len(word_matches) - 1, 2) * POINTS_PER_EXTRA_WORD_MATCH
+                evidence += min(extra, MAX_EXTRA_WORD_BONUS)
+            for pattern in data["patterns"]:
+                if re.search(pattern, text_lower):
+                    evidence += POINTS_PER_PATTERN_MATCH
+                    break
+            if evidence == 0.0:
+                continue
+            evidence *= data["sensitivity"]
+            scored.append((subtype, min(evidence, 0.95)))
+
+        if not scored:
+            # Tristeza genérica, sin matiz específico -> "nivel 1"
+            return GriefSubtypeResult(
+                subtype=None,
+                confidence=base_result.confidence,
+                base_emotion="tristeza",
+                response=base_result.response,
+            )
+
+        subtype, confidence = max(scored, key=lambda item: item[1])
+        if confidence < CLASSIFICATION_THRESHOLD:
+            return GriefSubtypeResult(
+                subtype=None,
+                confidence=base_result.confidence,
+                base_emotion="tristeza",
+                response=base_result.response,
+            )
+
+        response = random.choice(GRIEF_SUBTYPE_RESPONSES[subtype])
+        return GriefSubtypeResult(
+            subtype=subtype,
+            confidence=confidence,
+            base_emotion="tristeza",
+            response=response,
+        )

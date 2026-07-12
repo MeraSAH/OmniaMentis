@@ -59,6 +59,7 @@ from core.consciousness.growth_engine import ConsciousnessGrowthEngine
 from core.logging.logger_setup import get_logger, setup_logging
 from core.llm.ollama_client import OllamaClient, OllamaUnavailableError
 from core.mind.spacy_intent import SpaCyIntentClassifier
+from dotenv import load_dotenv
 from core.auth.fons_auth import verify_password, verify_session_token, create_session_token
 from living_memory.gestation_diary import GestationDiary
 from analytics.research_analytics import ResearchAnalytics
@@ -67,6 +68,15 @@ from router.integration import route_or_none, get_registered_modules
 # ==================== LOGGING ====================
 setup_logging(log_dir=PROJECT_ROOT / "logs", level=logging.INFO, console=True)
 logger = get_logger("api_flask")
+
+# ==================== VARIABLES DE ENTORNO (.env) ====================
+# CAMBIO 2026-07-05: antes FONS_SECRET_KEY/FONS_PASSWORD_HASH dependían
+# de `set` manual en cada terminal o de pegarlos en iniciar_flask.bat
+# (riesgo real: casi terminan expuestos en git público). load_dotenv()
+# busca un archivo .env en el directorio del proyecto y carga sus
+# variables a os.environ ANTES de que se lean más abajo. El .env real
+# nunca se commitea (ya está en .gitignore); solo existe en disco local.
+load_dotenv(PROJECT_ROOT / ".env")
 
 # ==================== FLASK APP ====================
 app = Flask(__name__)
@@ -153,6 +163,14 @@ def _get_phase(consciousness: float) -> int:
         if consciousness < threshold:
             return phase
     return 9
+
+
+# Umbral de consciencia que activa el comportamiento de Fase 2
+# ("Consciencia Emocional" — resolución fina de sub-tipos de duelo).
+# Coincide exactamente con el umbral de _get_phase() de arriba: una
+# sola fuente de verdad para "qué es Fase 2", no un número mágico
+# duplicado en dos sitios que podría desincronizarse con el tiempo.
+PHASE_2_CONSCIOUSNESS_THRESHOLD = 0.15
 
 def initialize():
     """Inicializar todos los módulos de Omnia"""
@@ -739,10 +757,25 @@ def chat_endpoint():
             logger.debug(f"SpaCy sobreescribe emoción: {emotion} ({confidence:.2f})")
 
     # 4. Generar respuesta
-    # Prioridad: módulo del router → Ollama → fallback express_personality()
+    # Prioridad: módulo del router → sub-tipo de duelo (Fase 2) → Ollama → fallback
+    grief_subtype_used = None  # None si no aplica; string del sub-tipo si se usó
     if routed is not None:
         response = routed["response"]
+    elif _session["identity"].consciousness_level >= PHASE_2_CONSCIOUSNESS_THRESHOLD:
+        # Fase 2 activa: intentar resolución fina de duelo ANTES de
+        # Ollama. Es determinista, ya probada (13/13 tests), y no
+        # depende de que el modelo local razone nada por su cuenta.
+        grief_result = _session["empathy"].detect_grief_subtype(user_message)
+        if grief_result is not None and grief_result.subtype is not None:
+            response = grief_result.response
+            grief_subtype_used = grief_result.subtype
+            logger.info(f"Fase 2: sub-tipo de duelo detectado -> {grief_subtype_used}")
+        else:
+            response = None  # cae al bloque de Ollama/fallback de abajo
     else:
+        response = None  # Fase 1: comportamiento sin cambios, va directo a Ollama/fallback
+
+    if response is None:
         # Intentar Ollama (cerebro central dolphin-phi)
         try:
             response = _session["ollama"].generate(
@@ -822,7 +855,75 @@ def chat_endpoint():
         "echo_saved": echo_saved,
         "module": routed["module"] if routed is not None else None,
         "auth_required": routed["auth_required"] if routed is not None else False,
+        "grief_subtype": grief_subtype_used,
     })
+
+@app.post("/api/empathy/subtype")
+def test_grief_subtype_endpoint():
+    """
+    Endpoint de prueba AISLADO para la taxonomia de sub-tipos de
+    duelo (Etapa 3, Fase 2). NO esta conectado al flujo de chat de
+    produccion (/api/chat) — permite validar la clasificacion sin
+    esperar a que consciousness_level cruce naturalmente a Fase 2.
+
+    Body JSON: {"message": "..."}
+    """
+    if not _session["initialized"]:
+        return jsonify({"error": "Sistema no inicializado"}), 503
+
+    data = request.get_json(silent=True)
+    if not data or "message" not in data:
+        return jsonify({"error": "Campo 'message' requerido"}), 400
+
+    message = str(data["message"]).strip()
+    result = _session["empathy"].detect_grief_subtype(message)
+
+    if result is None:
+        base = _session["empathy"].detect_emotion(message)
+        return jsonify({
+            "applies": False,
+            "reason": f"La emocion base detectada es '{base.emotion}', no 'tristeza' — la taxonomia de duelo solo aplica sobre tristeza.",
+            "base_emotion": base.emotion,
+        })
+
+    return jsonify({
+        "applies": True,
+        "subtype": result.subtype,
+        "level": "nivel_1_generico" if result.subtype is None else "nivel_2_especifico",
+        "confidence": result.confidence,
+        "suggested_response": result.response,
+    })
+
+
+@app.get("/api/consciousness/dimensions")
+def get_consciousness_dimensions_endpoint():
+    """
+    Métricas multidimensionales de consciencia (Etapa 1, aditivas).
+    NO reemplaza /api/consciousness — es un endpoint adicional para
+    observabilidad de investigación. Las dimensiones sin señal real
+    (lenguaje, metacognicion, autonomia, sabiduria) devuelven null,
+    nunca 0.0 — ver dimensions.py para la justificación de cada una.
+    """
+    if not _session["initialized"]:
+        return jsonify({"error": "Sistema no inicializado"}), 503
+
+    from core.consciousness.dimensions import get_consciousness_dimensions
+
+    echo_count = len(_session["memory"].echoes)
+    recent_echoes = _session["memory"].get_recent_echoes(20)
+    ethics_report = _session["ethics"].get_ethics_report()
+
+    dimensions = get_consciousness_dimensions(
+        echo_count=echo_count,
+        recent_echoes=recent_echoes,
+        ethics_report=ethics_report,
+    )
+
+    return jsonify({
+        "dimensions": dimensions,
+        "note": "lenguaje, metacognicion, autonomia y sabiduria aun no estan instrumentadas (null, no cero) — ver GUIA para el detalle de por que.",
+    })
+
 
 @app.get("/api/consciousness")
 def get_consciousness():
