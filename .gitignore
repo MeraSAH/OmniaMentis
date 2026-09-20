@@ -336,4 +336,6 @@ yarn.lock
 # ===== MANTENER ESTRUCTURA =====
 # Archivos .gitkeep para mantener carpetas vacías
 !.gitkeep
-!**/.gitkeep
+!**/.gitkeep*.CORRUPTO_BACKUP
+.env.backup*
+.env.*.bak
