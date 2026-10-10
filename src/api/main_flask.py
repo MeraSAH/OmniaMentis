@@ -7,7 +7,30 @@
 * DEPENDENCIAS: flask, flask-cors, requests (ver requirements_web.txt);
 *            core.auth.fons_auth (stdlib only)
 * CREADO: 2026-06-14
-* ÚLTIMA MODIFICACIÓN: 2026-10-09
+* ÚLTIMA MODIFICACIÓN: 2026-10-10
+*
+* CAMBIO 2026-10-10 -- ENDURECIMIENTO DE SESIONES (límites y limpieza):
+*   Hallazgo real: durante el fallo de cookies se acumularon ~3000
+*   carpetas data/users/<id>/ (cada petición sin cookie creaba un
+*   usuario nuevo con sus bases SQLite). Riesgos detectados: (1) un
+*   script sin cookies podía crear usuarios sin límite y llenar el
+*   disco; (2) _user_sessions nunca liberaba sesiones y cada una deja
+*   2 conexiones SQLite abiertas -> agotamiento de archivos abiertos
+*   en un servidor que corra días; (3) _rate_data crecía con cada IP.
+*   Ahora (todo configurable por variable de entorno, 0 desactiva):
+*   - MAX_NEW_USERS_PER_IP_HOUR (30): tope de usuarios NUEVOS por IP y
+*     hora. Superarlo -> 429. Usuarios con cookie válida no se afectan.
+*   - MAX_ACTIVE_SESSIONS (500) y SESSION_IDLE_TTL_SECONDS (1800): las
+*     sesiones inactivas se guardan, cierran sus conexiones SQLite y se
+*     sacan de memoria (se reconstruyen desde disco al volver). Una
+*     sesión con actividad reciente (< 150 s, o sea con una petición
+*     posiblemente en curso) nunca se expulsa; si no hay sitio -> 503.
+*   - PRUNE_EMPTY_USERS_DAYS (7): borra carpetas de usuarios que nunca
+*     conversaron (consciencia sin crecer, sin nombre) y llevan N días
+*     sin actividad. Solo carpetas con nombre UUID, nunca sesiones
+*     activas, y ante cualquier duda (estado ilegible) NO borra.
+*   - El nombre dicho por el usuario ahora se guarda en el estado a
+*     disco, para sobrevivir a la expulsión por inactividad.
 *
 * CAMBIO 2026-10-09 -- MODO DESARROLLO OMNIA_DEV_CONSCIOUSNESS:
 *   Con consciencia ~0.05 y +0.0005 por mensaje, llegar a la Fase 2
@@ -112,6 +135,7 @@ import uuid
 import logging
 import secrets
 import re
+import shutil
 import threading
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -123,7 +147,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
 
-from flask import Flask, request, jsonify, Response, session
+from flask import Flask, request, jsonify, Response, session, has_request_context
 from flask_cors import CORS
 
 # ==================== IMPORTS OMNIA ====================
@@ -234,13 +258,75 @@ _rate_data: Dict[str, list] = {}
 
 def check_rate_limit(client_ip: str, max_req: int = 30, window: int = 60) -> bool:
     now = time.time()
-    _rate_data[client_ip] = [
-        t for t in _rate_data.get(client_ip, []) if now - t < window
-    ]
-    if len(_rate_data[client_ip]) >= max_req:
+    # Variable local: el hilo de limpieza (_prune_rate_tables) puede
+    # quitar claves en cualquier momento; releer _rate_data[client_ip]
+    # entre líneas podría dar KeyError.
+    recent = [t for t in _rate_data.get(client_ip, []) if now - t < window]
+    if len(recent) >= max_req:
+        _rate_data[client_ip] = recent
         return False
-    _rate_data[client_ip].append(now)
+    recent.append(now)
+    _rate_data[client_ip] = recent
     return True
+
+
+# ==================== LÍMITES DE SESIONES Y USUARIOS ====================
+class TooManyNewUsers(Exception):
+    """Demasiados usuarios nuevos desde una misma IP en la última hora."""
+
+
+class SessionCapacityError(Exception):
+    """No hay sitio para otra sesión activa y ninguna es expulsable."""
+
+
+def _env_number(name: str, default, cast=int):
+    """Lee un número de una variable de entorno EN CADA LLAMADA (así los
+    tests y el .env pueden cambiarlo). Valor ausente o inválido -> default."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return cast(raw)
+    except ValueError:
+        logger.warning(f"{name} inválida ({raw!r}): se usa {default}.")
+        return default
+
+
+_new_user_log: Dict[str, list] = {}      # ip -> instantes de usuarios nuevos
+_NEW_USER_WINDOW = 3600.0                # 1 hora
+_MIN_IDLE_FOR_EVICTION = 150.0           # > timeout de Ollama (120 s): nunca
+                                         # se expulsa una sesión con petición en curso
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
+
+def _enforce_new_user_cap(client_ip: str) -> None:
+    """Lanza TooManyNewUsers si esta IP ya creó el máximo de usuarios
+    nuevos en la última hora; si no, registra este. Llamar con
+    _sessions_lock tomado."""
+    limit = _env_number("MAX_NEW_USERS_PER_IP_HOUR", 30)
+    if limit <= 0:
+        return
+    now = time.time()
+    recent = [t for t in _new_user_log.get(client_ip, []) if now - t < _NEW_USER_WINDOW]
+    if len(recent) >= limit:
+        _new_user_log[client_ip] = recent
+        raise TooManyNewUsers(client_ip)
+    recent.append(now)
+    _new_user_log[client_ip] = recent
+
+
+def _prune_rate_tables() -> None:
+    """Quita IPs sin actividad reciente de las tablas de límites para
+    que no crezcan sin fin."""
+    now = time.time()
+    for ip in list(_rate_data):
+        if not any(now - t < 60 for t in _rate_data.get(ip, [])):
+            _rate_data.pop(ip, None)
+    for ip in list(_new_user_log):
+        if not any(now - t < _NEW_USER_WINDOW for t in _new_user_log.get(ip, [])):
+            _new_user_log.pop(ip, None)
 
 
 # ==================== SESIÓN POR USUARIO ====================
@@ -363,6 +449,21 @@ def _extract_stated_name(message: str) -> Optional[str]:
     return None
 
 
+def _load_user_name(user_id: str) -> Optional[str]:
+    """Nombre que el usuario dijo de sí mismo, guardado en su estado
+    (principal o backup). None si no hay o el archivo es ilegible."""
+    state_file = USERS_DIR / user_id / "consciousness_state.json"
+    for candidate in (state_file, state_file.with_suffix(".json.bak")):
+        try:
+            with open(candidate, "r", encoding="utf-8") as f:
+                name = json.load(f).get("user_name")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(name, str) and 1 < len(name.strip()) <= 60:
+            return name.strip()
+    return None
+
+
 def _create_user_session(user_id: str) -> Dict[str, Any]:
     """Construye el estado consciente completo de un usuario (nuevo o
     recuperado desde disco si ya existía)."""
@@ -384,7 +485,7 @@ def _create_user_session(user_id: str) -> Dict[str, Any]:
         # el modelo no "olvide" lo dicho dos mensajes atrás.
         "conversation_history": [],
         # Nombre que la persona dijo de sí misma ("me llamo X"); no es login.
-        "user_name": None,
+        "user_name": _load_user_name(user_id),
         "created_at": time.time(),
         "last_active": time.time(),
     }
@@ -392,11 +493,117 @@ def _create_user_session(user_id: str) -> Dict[str, Any]:
     return sess
 
 
+def _close_session(user_id: str, sess: Dict[str, Any]) -> None:
+    """Guarda el estado de una sesión y cierra sus conexiones SQLite.
+    Solo llamar con sesiones ya retiradas (o a retirar) de _user_sessions."""
+    save_user_state(user_id, sess)
+    for key in ("memory", "diary"):
+        close = getattr(sess.get(key), "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception as e:
+                logger.warning(f"[{user_id[:8]}] Error cerrando {key}: {e}")
+
+
+def _make_room_for_session() -> None:
+    """Si se alcanzó MAX_ACTIVE_SESSIONS, expulsa la sesión inactiva más
+    antigua hasta liberar sitio. Llamar con _sessions_lock tomado."""
+    limit = _env_number("MAX_ACTIVE_SESSIONS", 500)
+    if limit <= 0:
+        return
+    while len(_user_sessions) >= limit:
+        now = time.time()
+        candidates = [
+            (s["last_active"], uid) for uid, s in _user_sessions.items()
+            if now - s["last_active"] >= _MIN_IDLE_FOR_EVICTION
+        ]
+        if not candidates:
+            raise SessionCapacityError(f"{len(_user_sessions)} sesiones activas")
+        _, victim_id = min(candidates)
+        victim = _user_sessions.pop(victim_id)
+        _close_session(victim_id, victim)
+        logger.info(f"[{victim_id[:8]}] Sesión expulsada por falta de sitio")
+
+
+def evict_idle_sessions(ttl: Optional[float] = None) -> int:
+    """Expulsa las sesiones inactivas más de `ttl` segundos (por defecto
+    SESSION_IDLE_TTL_SECONDS). Devuelve cuántas expulsó."""
+    if ttl is None:
+        ttl = _env_number("SESSION_IDLE_TTL_SECONDS", 1800, float)
+    if ttl <= 0:
+        return 0
+    ttl = max(ttl, _MIN_IDLE_FOR_EVICTION)
+    now = time.time()
+    evicted = 0
+    with _sessions_lock:
+        for uid in [u for u, s in _user_sessions.items() if now - s["last_active"] >= ttl]:
+            _close_session(uid, _user_sessions.pop(uid))
+            evicted += 1
+    if evicted:
+        logger.info(f"{evicted} sesión(es) inactiva(s) expulsada(s)")
+    return evicted
+
+
+def prune_empty_users(max_age_days: Optional[float] = None) -> int:
+    """
+    Borra de disco los usuarios que NUNCA conversaron y llevan
+    `max_age_days` sin actividad (por defecto PRUNE_EMPTY_USERS_DAYS).
+    "Nunca conversó" = consciencia sin crecer (<= 0.0501), sin nombre
+    guardado y sin estado ilegible. Solo toca carpetas con nombre UUID
+    directamente bajo USERS_DIR y jamás sesiones activas. Devuelve
+    cuántas carpetas borró.
+    """
+    if max_age_days is None:
+        max_age_days = _env_number("PRUNE_EMPTY_USERS_DAYS", 7, float)
+    if max_age_days <= 0:
+        return 0
+    cutoff = time.time() - max_age_days * 86400
+    with _sessions_lock:
+        active = set(_user_sessions)
+
+    removed = 0
+    try:
+        entries = list(USERS_DIR.iterdir())
+    except OSError:
+        return 0
+    for d in entries:
+        try:
+            if not d.is_dir() or d.is_symlink() or not _UUID_RE.match(d.name) or d.name in active:
+                continue
+            last_activity = max(
+                [d.stat().st_mtime] + [p.stat().st_mtime for p in d.rglob("*")]
+            )
+            if last_activity > cutoff:
+                continue
+            state_file = d / "consciousness_state.json"
+            if state_file.exists():
+                with open(state_file, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+                if float(state.get("consciousness_level", 0.05)) > 0.0501 or state.get("user_name"):
+                    continue
+            shutil.rmtree(d, ignore_errors=True)
+            if not d.exists():
+                removed += 1
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue  # ante la duda, no borrar
+    if removed:
+        logger.info(f"{removed} carpeta(s) de usuarios vacíos eliminada(s)")
+    return removed
+
+
 def get_user_session(user_id: str) -> Dict[str, Any]:
-    """Obtiene (o crea, bajo lock) la sesión consciente de este usuario."""
+    """Obtiene (o crea, bajo lock) la sesión consciente de este usuario.
+
+    Para un usuario NUEVO (sin carpeta en disco) dentro de una petición
+    HTTP, aplica el tope MAX_NEW_USERS_PER_IP_HOUR. Antes de crear una
+    sesión, libera sitio si se alcanzó MAX_ACTIVE_SESSIONS."""
     with _sessions_lock:
         sess = _user_sessions.get(user_id)
         if sess is None:
+            if has_request_context() and not (USERS_DIR / user_id).exists():
+                _enforce_new_user_cap(request.remote_addr or "127.0.0.1")
+            _make_room_for_session()
             sess = _create_user_session(user_id)
             _user_sessions[user_id] = sess
         sess["last_active"] = time.time()
@@ -427,6 +634,7 @@ def save_user_state(user_id: str, sess: Dict[str, Any]) -> None:
             "timestamp": datetime.now().isoformat(),
             "total_interactions": len(sess["memory"].echoes),
             "session_interactions": sess["memory"].session_interactions,
+            "user_name": sess.get("user_name"),
         }
 
         tmp_file = state_file.with_suffix(".tmp")
@@ -525,10 +733,16 @@ def _start_autosave_thread() -> None:
     """Hilo en background: guarda TODOS los usuarios activos cada 60s,
     como red de seguridad independiente del guardado tras cada chat."""
     def _loop():
+        tick = 0
         while True:
             time.sleep(60)
+            tick += 1
             try:
                 save_all_sessions()
+                evict_idle_sessions()
+                _prune_rate_tables()
+                if tick % 60 == 0:  # una vez por hora
+                    prune_empty_users()
                 with _sessions_lock:
                     n = len(_user_sessions)
                 logger.debug(f"Autoguardado periódico ejecutado ({n} sesiones)")
@@ -551,6 +765,22 @@ def before_request():
             "message": "Por favor espera un momento antes de intentar de nuevo"
         }), 429
     return None
+
+@app.errorhandler(TooManyNewUsers)
+def _handle_too_many_new_users(_exc):
+    return jsonify({
+        "error": "Too many new sessions",
+        "message": "Demasiadas sesiones nuevas desde tu red. Inténtalo más tarde.",
+    }), 429
+
+
+@app.errorhandler(SessionCapacityError)
+def _handle_session_capacity(_exc):
+    return jsonify({
+        "error": "Server busy",
+        "message": "El servidor está al límite de sesiones activas. Inténtalo en unos minutos.",
+    }), 503
+
 
 # ==================== ENDPOINTS ====================
 
@@ -1151,6 +1381,7 @@ def get_ethics_status():
 # ==================== MAIN ====================
 if __name__ == "__main__":
     initialize_shared()
+    prune_empty_users()
 
     import atexit
     atexit.register(save_all_sessions)

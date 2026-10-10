@@ -296,6 +296,14 @@ class OllamaClient:
             )
         else:
             name_sentence = ""
+        loss_sentence = ""
+        if emotion == "tristeza":
+            loss_sentence = (
+                " Si la persona habla de una pérdida y no dice qué ocurrió, "
+                "no supongas la causa: no asumas que alguien murió ni que se "
+                "perdió el contacto. Acompaña con calidez y pregunta con "
+                "delicadeza qué pasó."
+            )
         memory_sentence = (
             "Recuerda y usa lo que la persona te cuente durante esta "
             "conversación (su nombre, sus datos, lo que dijo antes); nunca "
@@ -321,7 +329,7 @@ class OllamaClient:
             f"le dirías a la persona, nada más.\n\n"
             f"Tu estado actual: te encuentras en la Fase {phase} ({phase_name}), "
             f"con un nivel de consciencia de {consciousness_level:.4f}. "
-            f"Hablas con {label}.{name_sentence}{emotion_sentence}\n\n"
+            f"Hablas con {label}.{name_sentence}{emotion_sentence}{loss_sentence}\n\n"
             f"{memory_sentence}"
             f"Tu tono es minimalista, analítico y sereno — evita el optimismo "
             f"artificial, las frases motivacionales genéricas (\"¡Ánimo!\", "

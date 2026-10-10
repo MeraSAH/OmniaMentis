@@ -126,20 +126,32 @@ def client(flask_app):
     return flask_app.app.test_client()
 
 
+_ISOLATED_ENV_VARS = (
+    "OMNIA_DEV_CONSCIOUSNESS",
+    "MAX_NEW_USERS_PER_IP_HOUR",
+    "MAX_ACTIVE_SESSIONS",
+    "SESSION_IDLE_TTL_SECONDS",
+    "PRUNE_EMPTY_USERS_DAYS",
+)
+
+
 @pytest.fixture(autouse=True)
-def _isolate_dev_consciousness_env():
+def _isolate_env():
     """
-    OMNIA_DEV_CONSCIOUSNESS suele estar activa en el .env del desarrollador
-    (load_dotenv() la carga al importar main_flask). Los tests de línea base
-    esperan consciencia 0.05, así que cada test arranca SIN la variable.
-    Los tests del modo desarrollo la fijan ellos mismos dentro del test.
-    Se restaura al terminar para no alterar el entorno del proceso.
+    Estas variables suelen estar en el .env del desarrollador
+    (load_dotenv() lo carga al importar main_flask) y cambian el
+    comportamiento del servidor: OMNIA_DEV_CONSCIOUSNESS fuerza la
+    consciencia inicial (los tests de línea base esperan 0.05) y las
+    demás fijan límites de sesiones. Cada test arranca SIN ellas; los
+    tests que las necesitan las fijan dentro del test. Se restauran al
+    terminar para no alterar el entorno del proceso.
     """
-    old = os.environ.pop("OMNIA_DEV_CONSCIOUSNESS", None)
+    saved = {k: os.environ.pop(k, None) for k in _ISOLATED_ENV_VARS}
     yield
-    os.environ.pop("OMNIA_DEV_CONSCIOUSNESS", None)
-    if old is not None:
-        os.environ["OMNIA_DEV_CONSCIOUSNESS"] = old
+    for k in _ISOLATED_ENV_VARS:
+        os.environ.pop(k, None)
+        if saved[k] is not None:
+            os.environ[k] = saved[k]
 
 
 @pytest.fixture(autouse=True)
@@ -150,9 +162,11 @@ def _reset_rate_limit(flask_app):
     peticiones reales contra la misma IP simulada (127.0.0.1). Sin
     este reset, tests que no tienen NADA que ver con rate limiting
     empezarían a fallar con 429 simplemente por ejecutarse después de
-    suficientes tests previos en el mismo archivo.
+    suficientes tests previos en el mismo archivo. Lo mismo aplica al
+    registro de usuarios nuevos por IP (MAX_NEW_USERS_PER_IP_HOUR).
     """
     flask_app._rate_data.clear()
+    flask_app._new_user_log.clear()
     yield
 
 
@@ -542,3 +556,229 @@ class TestDevConsciousnessMode:
         state_files = list(flask_app.USERS_DIR.glob("*/consciousness_state.json"))
         for f in state_files:
             assert '"consciousness_level": 0.5' not in f.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Endurecimiento de sesiones y usuarios (2026-10-10)
+# ---------------------------------------------------------------------------
+
+import json as _json
+import time as _time
+import uuid as _uuid
+
+
+@pytest.fixture
+def clean_sessions(flask_app):
+    """Aísla _user_sessions: los tests de expulsión no deben ver (ni
+    cerrar) las sesiones que dejaron otros tests. Se restaura al final."""
+    saved = dict(flask_app._user_sessions)
+    flask_app._user_sessions.clear()
+    yield flask_app._user_sessions
+    # Cierra lo que creó este test y restaura lo anterior.
+    for uid, sess in list(flask_app._user_sessions.items()):
+        for key in ("memory", "diary"):
+            close = getattr(sess.get(key), "close", None)
+            if callable(close):
+                close()
+    flask_app._user_sessions.clear()
+    flask_app._user_sessions.update(saved)
+
+
+def _new_uid():
+    return str(_uuid.uuid4())
+
+
+class TestNewUserCap:
+
+    def test_cap_blocks_new_users_from_same_ip_but_not_existing_ones(self, flask_app):
+        os.environ["MAX_NEW_USERS_PER_IP_HOUR"] = "2"
+        statuses = [flask_app.app.test_client().get("/api/consciousness").status_code
+                    for _ in range(3)]
+        assert statuses == [200, 200, 429]
+
+    def test_user_with_cookie_is_not_affected_by_cap(self, flask_app):
+        os.environ["MAX_NEW_USERS_PER_IP_HOUR"] = "1"
+        c = flask_app.app.test_client()
+        assert c.get("/api/consciousness").status_code == 200   # crea el usuario
+        for _ in range(5):                                      # ya existe -> sin tope
+            assert c.get("/api/consciousness").status_code == 200
+
+    def test_429_body_is_json_with_message(self, flask_app):
+        os.environ["MAX_NEW_USERS_PER_IP_HOUR"] = "1"
+        flask_app.app.test_client().get("/api/consciousness")
+        r = flask_app.app.test_client().get("/api/consciousness")
+        assert r.status_code == 429
+        assert "message" in r.get_json()
+
+    def test_zero_disables_cap(self, flask_app):
+        os.environ["MAX_NEW_USERS_PER_IP_HOUR"] = "0"
+        for _ in range(5):
+            assert flask_app.app.test_client().get("/api/consciousness").status_code == 200
+
+    def test_invalid_value_falls_back_to_default(self, flask_app):
+        os.environ["MAX_NEW_USERS_PER_IP_HOUR"] = "muchos"
+        assert flask_app.app.test_client().get("/api/consciousness").status_code == 200
+
+
+class TestSessionEviction:
+
+    def _make(self, flask_app, last_active_age):
+        uid = _new_uid()
+        sess = flask_app.get_user_session(uid)
+        sess["last_active"] = _time.time() - last_active_age
+        return uid, sess
+
+    def test_idle_sessions_are_evicted_and_connections_closed(self, flask_app, clean_sessions):
+        old_id, old = self._make(flask_app, 5000)
+        new_id, _ = self._make(flask_app, 0)
+        assert flask_app.evict_idle_sessions(ttl=1800) == 1
+        assert old_id not in clean_sessions and new_id in clean_sessions
+        assert old["memory"]._conn is None  # conexión SQLite cerrada
+
+    def test_recent_session_is_never_evicted_even_with_tiny_ttl(self, flask_app, clean_sessions):
+        uid, _ = self._make(flask_app, 10)  # activa hace 10 s (< 150 s)
+        assert flask_app.evict_idle_sessions(ttl=1) == 0
+        assert uid in clean_sessions
+
+    def test_cap_evicts_oldest_idle_session_to_make_room(self, flask_app, clean_sessions):
+        os.environ["MAX_ACTIVE_SESSIONS"] = "2"
+        a, _ = self._make(flask_app, 9000)
+        b, _ = self._make(flask_app, 5000)
+        c, _ = self._make(flask_app, 0)   # al crearla debe expulsar a la más antigua (a)
+        assert a not in clean_sessions
+        assert b in clean_sessions and c in clean_sessions
+
+    def test_cap_with_only_active_sessions_raises_capacity_error(self, flask_app, clean_sessions):
+        import pytest as _pytest
+        os.environ["MAX_ACTIVE_SESSIONS"] = "2"
+        self._make(flask_app, 0)
+        self._make(flask_app, 0)
+        with _pytest.raises(flask_app.SessionCapacityError):
+            flask_app.get_user_session(_new_uid())
+
+    def test_capacity_error_is_503_over_http(self, flask_app, clean_sessions):
+        os.environ["MAX_ACTIVE_SESSIONS"] = "1"
+        self._make(flask_app, 0)
+        r = flask_app.app.test_client().get("/api/consciousness")
+        assert r.status_code == 503
+
+    def test_evicted_session_is_rebuilt_from_disk_with_its_state(self, flask_app, clean_sessions):
+        uid, sess = self._make(flask_app, 5000)
+        sess["identity"].consciousness_level = 0.2
+        sess["user_name"] = "Ana"
+        flask_app.evict_idle_sessions(ttl=1800)
+        back = flask_app.get_user_session(uid)
+        assert back is not sess
+        assert abs(back["identity"].consciousness_level - 0.2) < 1e-9
+        assert back["user_name"] == "Ana"
+
+
+class TestPersistedUserName:
+
+    def test_name_is_saved_in_state_file(self, flask_app, clean_sessions):
+        uid = _new_uid()
+        sess = flask_app.get_user_session(uid)
+        sess["user_name"] = "Stalin Mera"
+        flask_app.save_user_state(uid, sess)
+        state = _json.loads((flask_app.USERS_DIR / uid / "consciousness_state.json")
+                            .read_text(encoding="utf-8"))
+        assert state["user_name"] == "Stalin Mera"
+
+    def test_load_name_returns_none_without_state(self, flask_app):
+        assert flask_app._load_user_name(_new_uid()) is None
+
+    def test_load_name_ignores_garbage(self, flask_app):
+        uid = _new_uid()
+        d = flask_app.USERS_DIR / uid
+        d.mkdir(parents=True)
+        (d / "consciousness_state.json").write_text("{no es json", encoding="utf-8")
+        assert flask_app._load_user_name(uid) is None
+
+
+class TestPruneEmptyUsers:
+
+    def _make_user(self, flask_app, level, age_days, name=None, uid=None, raw_state=None):
+        uid = uid or _new_uid()
+        d = flask_app.USERS_DIR / uid
+        (d / "memory").mkdir(parents=True)
+        state = d / "consciousness_state.json"
+        if raw_state is not None:
+            state.write_text(raw_state, encoding="utf-8")
+        else:
+            data = {"consciousness_level": level}
+            if name:
+                data["user_name"] = name
+            state.write_text(_json.dumps(data), encoding="utf-8")
+        old = _time.time() - age_days * 86400
+        for p in list(d.rglob("*")) + [d]:
+            os.utime(p, (old, old))
+        return uid
+
+    def test_removes_old_user_who_never_chatted(self, flask_app, clean_sessions):
+        uid = self._make_user(flask_app, 0.05, age_days=10)
+        flask_app.prune_empty_users(max_age_days=7)
+        assert not (flask_app.USERS_DIR / uid).exists()
+
+    def test_keeps_user_who_grew(self, flask_app, clean_sessions):
+        uid = self._make_user(flask_app, 0.2, age_days=30)
+        flask_app.prune_empty_users(max_age_days=7)
+        assert (flask_app.USERS_DIR / uid).exists()
+
+    def test_keeps_user_with_a_name_even_if_level_is_baseline(self, flask_app, clean_sessions):
+        uid = self._make_user(flask_app, 0.05, age_days=30, name="Ana")
+        flask_app.prune_empty_users(max_age_days=7)
+        assert (flask_app.USERS_DIR / uid).exists()
+
+    def test_keeps_recent_empty_user(self, flask_app, clean_sessions):
+        uid = self._make_user(flask_app, 0.05, age_days=1)
+        flask_app.prune_empty_users(max_age_days=7)
+        assert (flask_app.USERS_DIR / uid).exists()
+
+    def test_never_touches_non_uuid_folders(self, flask_app, clean_sessions):
+        uid = self._make_user(flask_app, 0.05, age_days=30, uid="carpeta_importante")
+        flask_app.prune_empty_users(max_age_days=7)
+        assert (flask_app.USERS_DIR / uid).exists()
+
+    def test_never_touches_active_sessions(self, flask_app, clean_sessions):
+        uid = self._make_user(flask_app, 0.05, age_days=30)
+        flask_app._user_sessions[uid] = {"last_active": _time.time()}
+        flask_app.prune_empty_users(max_age_days=7)
+        assert (flask_app.USERS_DIR / uid).exists()
+        flask_app._user_sessions.pop(uid)
+
+    def test_unreadable_state_means_do_not_delete(self, flask_app, clean_sessions):
+        uid = self._make_user(flask_app, 0, age_days=30, raw_state="{corrupto")
+        flask_app.prune_empty_users(max_age_days=7)
+        assert (flask_app.USERS_DIR / uid).exists()
+
+    def test_zero_days_disables_pruning(self, flask_app, clean_sessions):
+        uid = self._make_user(flask_app, 0.05, age_days=365)
+        assert flask_app.prune_empty_users(max_age_days=0) == 0
+        assert (flask_app.USERS_DIR / uid).exists()
+
+    def test_user_without_state_file_and_old_is_removed(self, flask_app, clean_sessions):
+        uid = _new_uid()
+        d = flask_app.USERS_DIR / uid
+        d.mkdir(parents=True)
+        old = _time.time() - 30 * 86400
+        os.utime(d, (old, old))
+        flask_app.prune_empty_users(max_age_days=7)
+        assert not d.exists()
+
+
+class TestRateTablePruning:
+
+    def test_prune_removes_stale_ips_only(self, flask_app):
+        now = _time.time()
+        flask_app._rate_data["vieja"] = [now - 500]
+        flask_app._rate_data["activa"] = [now - 1]
+        flask_app._new_user_log["vieja"] = [now - 7200]
+        flask_app._new_user_log["activa"] = [now - 10]
+        flask_app._prune_rate_tables()
+        assert "vieja" not in flask_app._rate_data and "activa" in flask_app._rate_data
+        assert "vieja" not in flask_app._new_user_log and "activa" in flask_app._new_user_log
+
+    def test_check_rate_limit_still_enforces_limit(self, flask_app):
+        ip = "9.9.9.9"
+        assert all(flask_app.check_rate_limit(ip, max_req=3, window=60) for _ in range(3))
+        assert flask_app.check_rate_limit(ip, max_req=3, window=60) is False

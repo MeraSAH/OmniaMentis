@@ -5,7 +5,7 @@
 *            documentado en tests/unit/test_empathy.py.
 * DEPENDENCIAS: re, random, typing (stdlib)
 * CREADO: 2025-11-15
-* ÚLTIMA MODIFICACIÓN: 2026-06-30
+* ÚLTIMA MODIFICACIÓN: 2026-10-09
 * ESTADO: Producción
 *
 * CAMBIO DE DISEÑO (2026-06-30) — FIX DEL BUG DE SESGO HACIA "AMOR":
@@ -29,6 +29,27 @@
 * test_empathy.py fueron actualizados para reflejar el comportamiento
 * correcto — tal como esos mismos tests anticipaban que debía pasar
 * si el rebalanceo de pesos se corregía alguna vez.
+*
+* CAMBIO 2026-10-09 — VOCABULARIO DE FALLECIMIENTO (hallazgo de uso real):
+* -----------------------------------------------------------------------
+* "Mi mejor amigo a fallecido" se clasificaba como "neutral": ni
+* "tristeza" ni "duelo" conocían la forma "fallecido/fallecida" (solo
+* "falleció"), y sin base "tristeza" detect_grief_subtype() ni se
+* evalúa. Ahora:
+*   - "tristeza" reconoce murió/falleció/fallecido/ha muerto (con y sin
+*     tilde) como patrón, SOLO si el texto trae un posesivo (mi, mis,
+*     nuestro/a/s), para que el fallecimiento de alguien cercano active
+*     el sub-clasificador de duelo sin disparar con "se murió de risa"
+*     o "el rey murió en la película".
+*   - "duelo" reconoce fallecid*, fallecieron, murieron, ha muerto, y
+*     las formas sin tilde (murio/fallecio).
+* "perdí a mi mejor amigo" a propósito NO se considera duelo: es
+* ambiguo (puede ser una muerte o una pérdida de contacto) y no se
+* inventa un matiz sin evidencia (ver detect_grief_subtype). Esa
+* ambigüedad la maneja el prompt de ollama_client.py.
+* LIMITACIÓN CONOCIDA: es léxico. Si el texto ya trae otra palabra
+* triste ("estoy triste, el rey murió en la película"), el sub-tipo
+* "duelo" puede activarse igual por la palabra "murió".
 """
 
 import re
@@ -116,8 +137,14 @@ GRIEF_SUBTYPES: Dict[str, EmotionPatterns] = {
         "sensitivity": 1.0,
     },
     "duelo": {
-        "words": ["duelo", "luto", "murió", "falleció", "ya no está", "perdí para siempre"],
-        "patterns": [r"\bya no est[áa]\b", r"\bnunca m[áa]s\b", r"\bse fue para siempre\b"],
+        "words": [
+            "duelo", "luto", "murió", "falleció", "fallecid", "fallecieron",
+            "murieron", "ha muerto", "ya no está", "perdí para siempre",
+        ],
+        "patterns": [
+            r"\bya no est[áa]\b", r"\bnunca m[áa]s\b", r"\bse fue para siempre\b",
+            r"\b(?:muri[óo]|falleci[óo])\b",
+        ],
         "sensitivity": 1.0,
     },
     "vacio_existencial": {
@@ -164,7 +191,13 @@ class OmniaEmpathy:
         self.emotion_patterns: Dict[EmotionType, EmotionPatterns] = {
             "tristeza": {
                 "words": ["triste", "deprimido", "mal", "dolor", "llorar", "solitario"],
-                "patterns": [r"\bperdí\b", r"\badiós\b", r"\bdesesperanzado\b"],
+                "patterns": [
+                    r"\bperdí\b", r"\badiós\b", r"\bdesesperanzado\b",
+                    # Fallecimiento SOLO si hay posesivo ("mi abuela murió",
+                    # "murieron mis padres"): evita "se murió de risa" o
+                    # "el rey murió en la película".
+                    r"(?s)(?=.*\b(?:mi|mis|nuestr[oa]s?)\b).*\b(?:muri[óo]|falleci[óo]|fallecid[oa]|murieron|fallecieron|ha muerto)\b",
+                ],
                 "sensitivity": 1.0,
             },
             "alegría": {
