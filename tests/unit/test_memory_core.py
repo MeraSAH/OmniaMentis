@@ -4,12 +4,25 @@
 * PROPÓSITO: Tests unitarios para LivingMemory (src/core/mind/memory_core.py)
 * DEPENDENCIAS: pytest, tmp_path fixture
 * CREADO: 2026-06-17
-* ÚLTIMA MODIFICACIÓN: 2026-06-17
+* ÚLTIMA MODIFICACIÓN: 2026-10-02
 * ESTADO: Test Permanente
 *
 * Cubre: guardado condicional de ecos según umbral de significancia,
 * contadores de sesión vs totales, persistencia a disco y recuperación
-* desde backup ante archivos corruptos.
+* desde base de datos corrupta.
+*
+* CAMBIO 2026-10-02: test_corrupted_echoes_file_recovers_from_backup
+* se reemplaza por test_corrupted_database_does_not_crash_on_reopen.
+* LivingMemory migró de JSON plano + backup manual a SQLite (ver
+* changelog en memory_core.py) -- el test original verificaba un
+* mecanismo de recuperación (archivo .backup) que ya no existe en el
+* nuevo diseño. El reemplazo verifica la garantía equivalente en el
+* nuevo modelo: una base de datos corrupta nunca debe tumbar el
+* proceso al abrir una nueva instancia sobre el mismo directorio.
+* Ningún otro test de este archivo cambió -- la migración se diseñó
+* específicamente para mantener self.echoes/self.stats y el contrato
+* público intactos, así que el resto sigue validando exactamente lo
+* mismo que antes.
 *
 * NOTA: usa tmp_path para aislar cada test en su propio directorio,
 * evitando que tests se contaminen entre sí o con datos reales del proyecto.
@@ -155,7 +168,7 @@ class TestReadingCounters:
 
 
 class TestPersistenceAndRecovery:
-    """Tests de guardado a disco y recuperación ante archivos corruptos."""
+    """Tests de guardado a disco y recuperación ante base de datos corrupta."""
 
     def test_save_and_reload_preserves_echoes(self, tmp_path):
         mem_dir = tmp_path / "memory"
@@ -166,19 +179,22 @@ class TestPersistenceAndRecovery:
         memory2 = LivingMemory(memory_dir=str(mem_dir))
         assert memory2.get_echo_count() == 1
 
-    def test_corrupted_echoes_file_recovers_from_backup(self, tmp_path):
+    def test_corrupted_database_does_not_crash_on_reopen(self, tmp_path):
+        """Ver nota de CAMBIO 2026-10-02 en el docstring del módulo:
+        reemplaza al test de corrupción de JSON, que probaba un
+        mecanismo (.backup manual) que ya no existe tras la migración
+        a SQLite."""
         mem_dir = tmp_path / "memory"
         memory1 = LivingMemory(memory_dir=str(mem_dir))
         memory1.save_echo("eco original", emotional_weight=0.8)
-        memory1.save_echo("segundo eco", emotional_weight=0.8)  # crea backup del primero
 
-        # Corromper el archivo principal
-        echoes_file = Path(memory1.echoes_file)
-        echoes_file.write_text("{esto no es json valido")
+        # Corromper el archivo de base de datos con bytes arbitrarios.
+        db_file = Path(memory1.db_path)
+        db_file.write_bytes(b"esto no es un archivo sqlite valido")
 
-        # Nueva instancia debe recuperar desde backup sin crashear
+        # Nueva instancia sobre el mismo directorio no debe lanzar excepción.
         memory2 = LivingMemory(memory_dir=str(mem_dir))
-        assert memory2.get_echo_count() >= 0  # no debe lanzar excepción
+        assert memory2.get_echo_count() >= 0
 
     def test_missing_files_start_with_defaults(self, tmp_path):
         memory = make_memory(tmp_path)

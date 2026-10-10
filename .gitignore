@@ -339,3 +339,17 @@ yarn.lock
 !**/.gitkeep*.CORRUPTO_BACKUP
 .env.backup*
 .env.*.bak
+
+# --- Datos de usuarios y SQLite (2026-10-09) ---
+data/users/
+*.db-wal
+*.db-shm
+*.migrated
+*.corrupt-*
+
+# --- Datos de usuarios y SQLite (2026-10-09) ---
+data/users/
+*.db-wal
+*.db-shm
+*.migrated
+*.corrupt-*

@@ -31,12 +31,12 @@ PROJECT_ROOT = Path(__file__).parent
 SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
 
-from core.essence.identity import OmniaIdentity
-from core.essence.ethics import OmniaEthics
-from core.mind.empathy import OmniaEmpathy
-from core.mind.memory_core import LivingMemory
-from core.consciousness.growth_engine import ConsciousnessGrowthEngine
-from router.integration import route_or_none, get_registered_modules
+from src.core.essence.identity import OmniaIdentity
+from src.core.essence.ethics import OmniaEthics
+from src. core.mind.empathy import OmniaEmpathy
+from src.core.mind.memory_core import LivingMemory
+from src.core.consciousness.growth_engine import ConsciousnessGrowthEngine
+from src.router.integration import route_or_none, get_registered_modules
 
 
 def process_message(

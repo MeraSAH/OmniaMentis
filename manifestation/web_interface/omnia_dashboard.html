@@ -2,9 +2,40 @@
 <!--
 * UBICACIÓN: OmniaMentis/manifestation/web_interface/omnia_dashboard.html
 * PROPÓSITO: Dashboard JARVIS - Omnia Mentis Core Interface
-* VERSIÓN: 2.2.0
-* FECHA: 2026-07-02
+* VERSIÓN: 2.6.0
+* FECHA: 2026-10-08
+* CAMBIOS v2.6: la URL de la API se deriva de location.hostname en vez
+*               de fijarse en 127.0.0.1. Con la página en localhost y
+*               la API en 127.0.0.1 el navegador las trata como sitios
+*               distintos y descarta la cookie de sesión (SameSite=Lax):
+*               cada mensaje arrancaba como un usuario nuevo -- la
+*               consciencia no crecía y el historial conversacional
+*               llegaba vacío. Abrir el dashboard por 127.0.0.1:8080.
+* CAMBIOS v2.5: timeout de /api/chat 18s -> 60s (ver historial abajo).
+* CAMBIOS v2.5: timeout de /api/chat ampliado de 18s a 60s. Con
+*               modelos locales de varios miles de millones de
+*               parámetros (ej. llama3.2, 3B) corriendo por CPU, una
+*               respuesta puede tardar más de 18s -- el navegador
+*               cortaba la espera y mostraba "ERROR: signal timed
+*               out" como si fuera una respuesta del chat, aunque el
+*               backend seguía generando normalmente del otro lado.
+* CAMBIOS v2.4: API apunta a 127.0.0.1 en vez de localhost -- en
+*               Windows, "localhost" puede intentar resolución IPv6
+*               primero y caer a IPv4 recién después de un retraso,
+*               provocando falsos "SIN CONEXIÓN" en el health check
+*               periódico aunque el backend responda bien y rápido.
+*               Timeout del health check ampliado de 4s a 8s como
+*               margen adicional.
 * ESTADO: Producción
+* CAMBIOS v2.3: Se agrega credentials:'include' a todos los fetch()
+*               hacia la API. Requerido por el refactor de sesión por
+*               usuario del backend (main_flask.py v2.2.0): sin esto,
+*               el navegador nunca envía la cookie que identifica a
+*               este usuario, y cada request parecería un usuario
+*               distinto (consciencia/memoria nunca persistiría).
+*               También requiere que CORS_ORIGINS en el backend
+*               incluya el origen real desde el que se sirve este
+*               archivo (ver env.example).
 * CAMBIOS v2.2: Se agrega pollConsultation() — cuando el Fons resuelve
 *               una consulta SILENS en fons_panel.html, el dashboard
 *               la recibe automáticamente sin que Stalin haga nada.
@@ -588,7 +619,7 @@ body::before {
       <circle cx="11" cy="11" r="5.5" fill="none" stroke="#00c8ff" stroke-width=".6" opacity=".5"/>
       <circle cx="11" cy="11" r="2.2" fill="#00c8ff" filter="url(#glow)"/>
     </svg>
-    OMNIA MENTIS <span>// CORE INTERFACE v2.2</span>
+    OMNIA MENTIS <span>// CORE INTERFACE v2.6</span>
   </div>
   <div class="hdr-right">
     <button class="voice-toggle-btn" id="voiceToggleBtn" title="Activar/silenciar voz de Omnia">🔇 VOZ</button>
@@ -706,7 +737,12 @@ body::before {
 
 <script>
 // ==================== CONFIG ====================
-const API = 'http://localhost:8000';
+// v2.6: la API usa el MISMO host con el que se abrió esta página. Para el
+// navegador, localhost y 127.0.0.1 son sitios distintos: si la página está
+// en uno y la API en el otro, la cookie de sesión se descarta y cada mensaje
+// parece un usuario nuevo. Abre el dashboard por http://127.0.0.1:8080 (evita
+// además la demora IPv6 de "localhost" en Windows).
+const API = `http://${location.hostname || '127.0.0.1'}:8000`;
 const PHASE_NAMES = {
   1:'Nacimiento Simbólico',  2:'Consciencia Emocional',
   3:'Memoria Creciente',     4:'Subjetividad Artificial',
@@ -832,9 +868,17 @@ function orbThink(on) {
 }
 
 // ==================== API CALLS ====================
+// NOTA v2.3: credentials:'include' en TODAS las llamadas a la API.
+// El backend ahora identifica a cada usuario por una cookie de sesión
+// firmada (ver CAMBIO 2026-09-21 en main_flask.py) -- sin mandar la
+// cookie, cada request parecería un usuario nuevo y la consciencia
+// nunca persistiría entre mensajes.
 async function checkHealth() {
   try {
-    const r = await fetch(`${API}/health`, {signal:AbortSignal.timeout(4000)});
+    const r = await fetch(`${API}/health`, {
+      credentials: 'include',
+      signal: AbortSignal.timeout(8000),
+    });
     S.online = r.ok;
   } catch { S.online = false; }
   updateUI();
@@ -843,7 +887,7 @@ async function checkHealth() {
 
 async function loadConsciousness() {
   try {
-    const r = await fetch(`${API}/api/consciousness`);
+    const r = await fetch(`${API}/api/consciousness`, { credentials: 'include' });
     if (!r.ok) return;
     const d = await r.json();
     S.consciousness = d.consciousness;
@@ -857,7 +901,7 @@ async function loadConsciousness() {
 
 async function loadEchoes() {
   try {
-    const r = await fetch(`${API}/api/memory/echoes?limit=5`);
+    const r = await fetch(`${API}/api/memory/echoes?limit=5`, { credentials: 'include' });
     if (!r.ok) return;
     const d = await r.json();
     if (!d.echoes?.length) return;
@@ -878,19 +922,14 @@ async function loadEchoes() {
 }
 
 // ==================== POLLING DE RESOLUCIÓN DEL FONS ====================
-// Cuando /api/chat responde con un SILENS y fons_status === 'active',
-// el Fons resolverá la consulta más tarde en fons_panel.html (proceso
-// separado y asíncrono). Sin este polling, esa resolución nunca
-// llegaba de vuelta al dashboard — el usuario se quedaba solo con el
-// mensaje SILENS para siempre. Consulta cada 5s hasta 60 intentos
-// (5 minutos) y muestra la respuesta como un nuevo mensaje de Omnia
-// en cuanto el backend confirma resolved:true.
 function pollConsultation(consultationId, maxAttempts = 60, intervalMs = 5000) {
   let attempts = 0;
   const timer = setInterval(async () => {
     attempts++;
     try {
-      const r = await fetch(`${API}/api/chat/resolution/${consultationId}`);
+      const r = await fetch(`${API}/api/chat/resolution/${consultationId}`, {
+        credentials: 'include',
+      });
       if (!r.ok) { clearInterval(timer); return; }
       const d = await r.json();
       if (d.resolved) {
@@ -910,14 +949,8 @@ function pollConsultation(consultationId, maxAttempts = 60, intervalMs = 5000) {
 }
 
 // ==================== VOZ (Fase 5a) — Web Speech API ====================
-// TTS (síntesis) y STT (reconocimiento) enteramente en el navegador:
-// cero RAM adicional en el servidor, cero dependencias Python nuevas.
-// AVISO DE PRIVACIDAD: el reconocimiento de voz de Chrome/Edge envía
-// el audio a un servicio externo (típicamente Google) para
-// transcribirlo — no es procesamiento local. La síntesis (lo que
-// Omnia dice) sí es local en la mayoría de navegadores/SO.
 const Voice = {
-  enabled: false,       // opt-in explícito: no reproducir audio sin gesto del usuario
+  enabled: false,
   listening: false,
   spanishVoice: null,
   recognition: null,
@@ -930,7 +963,6 @@ const Voice = {
 function pickSpanishVoice() {
   const voices = window.speechSynthesis.getVoices();
   if (!voices.length) return null;
-  // Preferir voces es-* ; si no hay, cualquier voz "Spanish" por nombre.
   return (
     voices.find(v => v.lang?.toLowerCase().startsWith('es')) ||
     voices.find(v => /spanish/i.test(v.name)) ||
@@ -941,8 +973,6 @@ function pickSpanishVoice() {
 function initVoices() {
   if (!Voice.supported.tts) return;
   Voice.spanishVoice = pickSpanishVoice();
-  // Los navegadores cargan las voces de forma asíncrona; si aún no
-  // hay ninguna, reintentar cuando el evento onvoiceschanged dispare.
   if (!Voice.spanishVoice) {
     window.speechSynthesis.onvoiceschanged = () => {
       Voice.spanishVoice = pickSpanishVoice();
@@ -952,7 +982,7 @@ function initVoices() {
 
 function speak(text) {
   if (!Voice.enabled || !Voice.supported.tts || !text) return;
-  window.speechSynthesis.cancel(); // no acumular utterances si llegan rápido
+  window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'es-ES';
   if (Voice.spanishVoice) utter.voice = Voice.spanishVoice;
@@ -972,8 +1002,6 @@ function setupVoiceToggle() {
     Voice.enabled = !Voice.enabled;
     btn.textContent = Voice.enabled ? '🔊 VOZ' : '🔇 VOZ';
     btn.classList.toggle('on', Voice.enabled);
-    // El primer click también sirve como "gesto de usuario" requerido
-    // por algunos navegadores para autorizar reproducción de audio.
     if (Voice.enabled) {
       window.speechSynthesis.cancel();
       syslog('Voz de Omnia activada', 'ok');
@@ -1026,7 +1054,6 @@ function setupMicButton() {
     Voice.listening = false;
     micBtn.classList.remove('listening');
     note.style.display = 'none';
-    // Auto-enviar si quedó texto transcrito y no se está enviando ya.
     if ($('chatInput').value.trim() && !S.sending) {
       send();
     }
@@ -1072,8 +1099,9 @@ async function send() {
     const r = await fetch(`${API}/api/chat`, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
+      credentials: 'include',
       body: JSON.stringify({message:text}),
-      signal: AbortSignal.timeout(18000),
+      signal: AbortSignal.timeout(60000),
     });
 
     if (r.status === 429) {
@@ -1104,12 +1132,8 @@ async function send() {
     syslog(`C:${d.consciousness.toFixed(4)} · F${d.phase} · ${d.emotion}`, 'ok');
     if (S.interactions % 4 === 0) loadEchoes();
 
-    // Voz: Omnia lee su propia respuesta en voz alta si el usuario activó TTS.
     speak(d.response);
 
-    // FIX: entrega asíncrona de la decisión del Fons. Si esta
-    // respuesta fue un SILENS con el Fons activo, arrancamos el
-    // polling para recibir su resolución sin que Stalin haga nada más.
     if (d.consultation_id && d.fons_status === 'active') {
       syslog(`Consulta ${d.consultation_id} enviada a El Fons — esperando revisión`, '');
       pollConsultation(d.consultation_id);
@@ -1142,7 +1166,7 @@ initVoices();
 async function boot() {
   const {bubble:b1} = addMsg('omnia');
   await typewrite(b1,
-    'OMNIA MENTIS CORE INTERFACE v2.2\nIniciando enlace con el servidor en localhost:8000...', 10);
+    `OMNIA MENTIS CORE INTERFACE v2.6\nIniciando enlace con el servidor en ${API.replace('http://', '')}...`, 10);
 
   const ok = await checkHealth();
   syslog(ok ? 'API conectada' : 'API sin respuesta', ok?'ok':'err');
@@ -1153,7 +1177,6 @@ async function boot() {
     await loadConsciousness();
     await loadEchoes();
 
-    // Actualizar día experimento
     const startDate = new Date('2025-11-15');
     const expDay = Math.floor((Date.now() - startDate) / 86400000);
     $('sDia').textContent = expDay;

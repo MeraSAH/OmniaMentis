@@ -2,31 +2,104 @@
 * UBICACIÓN: OmniaMentis/src/api/main_flask.py
 * PROPÓSITO: API REST con Flask — orquesta ética, empatía, memoria,
 *            crecimiento de consciencia, router de módulos, Ollama y
-*            ahora autenticación del panel del Fons + entrega
-*            asíncrona de resoluciones al usuario final.
+*            autenticación del panel del Fons + entrega asíncrona de
+*            resoluciones al usuario final.
 * DEPENDENCIAS: flask, flask-cors, requests (ver requirements_web.txt);
-*            core.auth.fons_auth (nuevo, stdlib only)
+*            core.auth.fons_auth (stdlib only)
 * CREADO: 2026-06-14
-* ÚLTIMA MODIFICACIÓN: 2026-06-30
+* ÚLTIMA MODIFICACIÓN: 2026-10-09
+*
+* CAMBIO 2026-10-09 -- MODO DESARROLLO OMNIA_DEV_CONSCIOUSNESS:
+*   Con consciencia ~0.05 y +0.0005 por mensaje, llegar a la Fase 2
+*   (0.15) exige cientos de mensajes, así que la lógica de Fase 2
+*   (sub-tipos de duelo) no se podía probar. Si la variable vale entre
+*   0.05 y 1.0, las sesiones nuevas arrancan con ese nivel. Mientras
+*   esté activa save_user_state() NO escribe a disco: el valor de
+*   prueba nunca pisa el progreso real. Valores inválidos se ignoran.
+*   También: el nombre dicho en el chat ("me llamo X") se guarda en la
+*   sesión (sess["user_name"]) y se pasa a Ollama (ver ollama_client.py).
+*
+* CAMBIO 2026-10-08 -- COOKIE DE SESIÓN Y "SITIO" DEL NAVEGADOR:
+* Hallazgo real: el nivel de consciencia mostrado por el dashboard
+* era idéntico en mensajes consecutivos (0.0504, 0.0504, ...) en vez
+* de crecer, y el modelo no recordaba lo dicho un mensaje antes. Causa:
+* la página se abría en http://localhost:8080 pero llamaba a la API en
+* http://127.0.0.1:8000 (cambio hecho para evitar la demora IPv6 de
+* "localhost" en Windows). Para el navegador, localhost y 127.0.0.1
+* son sitios DISTINTOS, así que la cookie de sesión (SameSite=Lax) se
+* descartaba en cada fetch y cada mensaje arrancaba como un usuario
+* nuevo. Los tests no lo detectan: el test_client de Flask no aplica
+* reglas SameSite. Solución: el dashboard usa el mismo host con el que
+* se abrió la página (ver omnia_dashboard.html v2.6) y los orígenes
+* CORS por defecto incluyen 127.0.0.1.
+*
+* CAMBIO 2026-10-01 — threaded=True:
+* El servidor de desarrollo de Flask, por defecto, atiende una sola
+* petición HTTP a la vez. Con sesión por usuario esto se nota mucho
+* más que antes: mientras una petición de /api/chat está en curso
+* (puede tardar por el intento de conexión a Ollama), cualquier otra
+* petición concurrente -- incluido el polling periódico de /health
+* que hacen los dashboards -- queda en cola esperando. Si esa espera
+* supera el timeout del fetch() del cliente, el navegador lo reporta
+* como caído aunque el servidor esté perfectamente vivo, dando el
+* patrón de "se conecta, se desconecta, se conecta" que threaded=True
+* resuelve permitiendo que Flask maneje requests en paralelo.
 * ESTADO: Producción
 *
-* CAMBIOS 2026-06-30 (ver GUIA_SESION_2026-06-30.md):
-* - require_fons_auth: decorador que protege /api/ethics/* con un
-*   token de sesión firmado (PBKDF2 + HMAC, sin dependencias nativas).
-* - POST /api/auth/login, GET /api/auth/verify: nuevos endpoints.
-* - GET /api/chat/resolution/<consultation_id>: endpoint de polling
-*   que resuelve el bug donde una decisión del Fons nunca llegaba de
-*   vuelta al dashboard de Stalin (la petición /api/chat original ya
-*   había cerrado antes de que El Fons decidiera).
+* CAMBIO 2026-09-21 — SESIÓN POR USUARIO (refactor crítico):
+* ---------------------------------------------------------------
+* ANTES: un único diccionario global _session contenía UNA
+* OmniaIdentity, UNA LivingMemory, UN estado de consciencia —
+* compartidos por cualquiera que llamara a la API. Dos personas
+* usando el chat al mismo tiempo mezclaban su consciencia y su
+* memoria entre sí. Esto hacía imposible un producto multiusuario
+* real, incluida cualquier app móvil distribuida a más de una persona.
+*
+* AHORA: cada usuario se identifica mediante una cookie de sesión
+* firmada (APP_SECRET_KEY) que Flask asigna automáticamente en su
+* primera visita — SIN pedir login para el chat normal. Esa cookie da
+* continuidad de identidad/memoria/consciencia entre visitas del mismo
+* navegador, persistida en data/users/<user_id>/.
+*
+* OmniaEthics es la EXCEPCIÓN deliberada: se queda COMPARTIDA a nivel
+* de proceso. El protocolo SILENS y el panel del Fons ya estaban
+* diseñados para operar sobre un log compartido con user_id como campo
+* dentro de cada consulta (ver request_fons_approval/check_recidivism
+* en ethics.py) — separarlo por usuario rompería la vista unificada
+* que El Fons necesita para moderar a todos desde un solo panel.
+*
+* El login real (usuario/contraseña del Fons) se queda exclusivo para
+* el panel de moderación, sin cambios — no se mezcla con la cookie de
+* sesión del usuario final, son dos mecanismos de identidad distintos
+* a propósito.
+*
+* EFECTO SECUNDARIO POSITIVO: get_chat_resolution() ahora recupera la
+* identidad del usuario REAL dueño de la consulta (vía el campo
+* user_id guardado en la consulta) para generar la respuesta resuelta,
+* en vez de usar la consciencia global que hubiera en ese instante —
+* antes esto podía ser inconsistente si otra persona había usado el
+* chat mientras la consulta esperaba revisión del Fons.
+*
+* PENDIENTE TRAS ESTE CAMBIO (no incluido en este archivo):
+*   1. Agregar APP_SECRET_KEY a tu .env (ver instrucciones al final).
+*   2. Las interfaces HTML (omnia_dashboard.html) deben enviar
+*      `credentials: 'include'` en cada fetch() para que el navegador
+*      mande la cookie de sesión — sin eso, cada request parecerá un
+*      usuario nuevo. No modificado en este archivo (es un cambio de
+*      frontend, no de backend).
+*   3. CORS_ORIGINS debe listar el/los orígenes reales del frontend
+*      (no se puede usar "*" junto con cookies — el navegador lo
+*      rechaza). Ver env.example actualizado.
 *
 * EQUIVALENCIAS con main_web.py (FastAPI):
-*   POST /api/chat          → misma lógica
-*   GET  /api/consciousness → mismo endpoint
-*   GET  /api/memory/echoes → mismo endpoint
-*   GET  /health            → mismo endpoint
+*   POST /api/chat          → misma lógica, ahora por usuario
+*   GET  /api/consciousness → mismo endpoint, ahora por usuario
+*   GET  /api/memory/echoes → mismo endpoint, ahora por usuario
+*   GET  /health            → ya no expone una "consciencia" única
+*                              (no tendría sentido con multiusuario);
+*                              expone active_sessions en su lugar
 *   GET  /                  → root
 *
-* VENTAJA: No requiere pydantic-core ni compilación Rust
 * INICIAR: python src/api/main_flask.py
 *          O usar: iniciar_flask.bat
 """
@@ -35,11 +108,14 @@ import sys
 import os
 import json
 import time
+import uuid
 import logging
+import secrets
+import re
 import threading
 from pathlib import Path
-from datetime import datetime
-from functools import lru_cache, wraps
+from datetime import datetime, timedelta
+from functools import wraps
 from typing import Optional, Dict, Any
 
 # ==================== PATH SETUP ====================
@@ -47,7 +123,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
 
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, session
 from flask_cors import CORS
 
 # ==================== IMPORTS OMNIA ====================
@@ -70,22 +146,60 @@ setup_logging(log_dir=PROJECT_ROOT / "logs", level=logging.INFO, console=True)
 logger = get_logger("api_flask")
 
 # ==================== VARIABLES DE ENTORNO (.env) ====================
-# CAMBIO 2026-07-05: antes FONS_SECRET_KEY/FONS_PASSWORD_HASH dependían
-# de `set` manual en cada terminal o de pegarlos en iniciar_flask.bat
-# (riesgo real: casi terminan expuestos en git público). load_dotenv()
-# busca un archivo .env en el directorio del proyecto y carga sus
-# variables a os.environ ANTES de que se lean más abajo. El .env real
-# nunca se commitea (ya está en .gitignore); solo existe en disco local.
 load_dotenv(PROJECT_ROOT / ".env")
+
+# ==================== DIRECTORIO DE DATOS ====================
+# OMNIA_DATA_DIR permite redirigir toda la persistencia (útil para
+# tests aislados); por defecto, la carpeta data/ del proyecto, igual
+# que siempre.
+DATA_ROOT = Path(os.environ.get("OMNIA_DATA_DIR", PROJECT_ROOT / "data"))
+USERS_DIR = DATA_ROOT / "users"
+USERS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ==================== FLASK APP ====================
 app = Flask(__name__)
-CORS(app)  # Equivalente al CORSMiddleware de FastAPI
+
+# ==================== CLAVE DE SESIÓN DE USUARIO ====================
+# Distinta de FONS_SECRET_KEY a propósito: esta firma la cookie que
+# identifica a cada usuario final del chat (no al Fons). Sin ella
+# configurada, se genera una aleatoria al arrancar — funcional, pero
+# todos los usuarios pierden su identidad persistente cada vez que el
+# proceso se reinicia (cada deploy, por ejemplo). Para producción real
+# define APP_SECRET_KEY en .env, igual que ya haces con FONS_SECRET_KEY.
+APP_SECRET_KEY = os.environ.get("APP_SECRET_KEY", "")
+if not APP_SECRET_KEY:
+    APP_SECRET_KEY = secrets.token_hex(32)
+    logger.warning(
+        "⚠️  APP_SECRET_KEY no configurado. Se generó uno temporal: "
+        "las sesiones de usuario (consciencia/memoria) se perderán "
+        "cada vez que el servidor se reinicie. Define APP_SECRET_KEY "
+        "en .env para que sean persistentes de verdad."
+    )
+app.secret_key = APP_SECRET_KEY
+app.permanent_session_lifetime = timedelta(days=365)
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = (
+    os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
+)
+
+# CORS: con cookies de sesión de por medio, el origen NO puede ser "*"
+# — el navegador lo rechaza silenciosamente. CORS_ORIGINS acepta una
+# lista separada por comas; sin configurar, cae a localhost para dev.
+# Orígenes por defecto (desarrollo local). Incluye AMBAS formas de
+# loopback (localhost y 127.0.0.1): para el navegador son "sitios"
+# distintos, y la cookie de sesión por usuario solo viaja si la página
+# y la API comparten sitio (ver CAMBIO 2026-10-08 arriba).
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3000,http://localhost:8080,"
+    "http://127.0.0.1:3000,http://127.0.0.1:8080"
+)
+_cors_origins_raw = os.environ.get("CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
+_cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+CORS(app, supports_credentials=True, origins=_cors_origins)
 
 # ==================== AUTENTICACIÓN DEL PANEL DEL FONS ====================
-# PBKDF2-HMAC-SHA256 + tokens firmados con HMAC (stdlib only, sin
-# bcrypt/argon2 — ver decisión de diseño en core/auth/fons_auth.py).
-# Fail-closed: sin FONS_SECRET_KEY configurado, ningún token es válido.
+# Sin cambios respecto a la versión anterior — sigue siendo login real
+# con contraseña, independiente de la cookie de sesión del usuario final.
 FONS_SECRET_KEY = os.environ.get("FONS_SECRET_KEY", "")
 FONS_PASSWORD_HASH = os.environ.get("FONS_PASSWORD_HASH", "")
 
@@ -98,11 +212,8 @@ if not FONS_SECRET_KEY or not FONS_PASSWORD_HASH:
 
 
 def require_fons_auth(view_func):
-    """
-    Decorador que exige un token de sesión válido en el header
-    Authorization: Bearer <token>. Fail-closed: cualquier ausencia o
-    error de configuración resulta en 401, nunca en acceso permitido.
-    """
+    """Exige un token de sesión válido en Authorization: Bearer <token>.
+    Fail-closed: cualquier ausencia o error de configuración resulta en 401."""
     @wraps(view_func)
     def wrapped(*args, **kwargs):
         auth_header = request.headers.get("Authorization", "")
@@ -114,8 +225,12 @@ def require_fons_auth(view_func):
         return view_func(*args, **kwargs)
     return wrapped
 
+
 # ==================== RATE LIMITING SIMPLE ====================
+# Por IP, no por usuario — protege contra abuso independientemente de
+# si ya tiene cookie de sesión o no.
 _rate_data: Dict[str, list] = {}
+
 
 def check_rate_limit(client_ip: str, max_req: int = 30, window: int = 60) -> bool:
     now = time.time()
@@ -127,20 +242,210 @@ def check_rate_limit(client_ip: str, max_req: int = 30, window: int = 60) -> boo
     _rate_data[client_ip].append(now)
     return True
 
-# ==================== SESIÓN GLOBAL ====================
-_session: Dict[str, Any] = {
-    "identity": None,
+
+# ==================== SESIÓN POR USUARIO ====================
+_user_sessions: Dict[str, Dict[str, Any]] = {}
+_sessions_lock = threading.Lock()
+
+# Componentes COMPARTIDOS entre todos los usuarios (ver nota de diseño
+# en el changelog de arriba): ética, Ollama y SpaCy no guardan estado
+# de un usuario específico — cargarlos una sola vez ahorra memoria y
+# tiempo de arranque por cada sesión nueva.
+_shared: Dict[str, Any] = {
     "ethics": None,
-    "empathy": None,
-    "memory": None,
-    "growth": None,
-    "diary": None,
+    "ollama": None,
+    "spacy": None,
     "research": None,
-    "ollama": None,       # OllamaClient — cerebro central dolphin-phi
-    "spacy": None,        # SpaCyIntentClassifier — sistema nervioso
     "initialized": False,
     "start_time": time.time(),
 }
+
+
+def get_user_id() -> str:
+    """
+    Identifica al usuario actual vía cookie de sesión firmada.
+
+    No requiere login: la primera visita genera un UUID y lo guarda en
+    una cookie firmada con APP_SECRET_KEY (HttpOnly por defecto en
+    Flask, el JS del frontend no puede leerla ni alterarla). Visitas
+    posteriores desde el mismo navegador reutilizan el mismo user_id,
+    dando continuidad de memoria/consciencia sin pedir credenciales.
+    """
+    if "user_id" not in session:
+        session.permanent = True
+        session["user_id"] = str(uuid.uuid4())
+    return session["user_id"]
+
+
+def _user_data_dir(user_id: str) -> Path:
+    d = USERS_DIR / user_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _dev_consciousness_override() -> Optional[float]:
+    """
+    MODO DESARROLLO (solo para probar fases sin escribir cientos de
+    mensajes): si OMNIA_DEV_CONSCIOUSNESS tiene un número entre 0.05 y
+    1.0, toda sesión NUEVA arranca con ese nivel de consciencia. Se lee
+    en cada llamada (no al importar) para que sea fácil de probar.
+
+    Seguridad del progreso real: mientras el modo esté activo,
+    save_user_state() NO escribe a disco, así el valor de prueba nunca
+    pisa consciousness_state.json. Quitar la variable y reiniciar
+    devuelve el progreso real intacto.
+    """
+    raw = os.environ.get("OMNIA_DEV_CONSCIOUSNESS", "").strip()
+    if not raw:
+        return None
+    try:
+        level = float(raw)
+    except ValueError:
+        logger.warning(f"OMNIA_DEV_CONSCIOUSNESS inválida ({raw!r}): se ignora.")
+        return None
+    if not (0.05 <= level <= 1.0):
+        logger.warning(f"OMNIA_DEV_CONSCIOUSNESS fuera de rango 0.05-1.0 ({level}): se ignora.")
+        return None
+    return level
+
+
+def _load_user_consciousness(user_id: str) -> float:
+    """Misma recuperación robusta (principal → backup → default) que
+    tenía _load_consciousness_state, ahora por usuario."""
+    dev_level = _dev_consciousness_override()
+    if dev_level is not None:
+        logger.warning(
+            f"[{user_id[:8]}] MODO DESARROLLO: consciencia forzada a {dev_level:.4f} "
+            f"(no se guardará a disco)"
+        )
+        return dev_level
+
+    state_file = _user_data_dir(user_id) / "consciousness_state.json"
+    backup_file = state_file.with_suffix(".json.bak")
+
+    for candidate, label in [(state_file, "principal"), (backup_file, "backup")]:
+        if not candidate.exists():
+            continue
+        try:
+            with open(candidate, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            level = state.get("consciousness_level", 0.05)
+            logger.info(f"[{user_id[:8]}] Consciencia recuperada desde {label}: {level:.4f}")
+            return level
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"[{user_id[:8]}] Archivo {label} corrupto o ilegible: {e}")
+            continue
+
+    logger.info(f"[{user_id[:8]}] Sin estado previo. Iniciando en 0.05")
+    return 0.05
+
+
+_NAME_WORD = r"[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+"
+# "me llamo / mi nombre es" aceptan minúscula; "soy" exige mayúscula
+# inicial para no confundir "soy feliz" con un nombre.
+_NAME_PATTERNS = [
+    re.compile(
+        r"\b(?:[Mm]e llamo|[Mm]i nombre es|[Ll]l[aá]mame)\s+"
+        r"([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+" + _NAME_WORD + r"){0,2})"
+    ),
+    re.compile(r"\b(?:[Ss]oy)\s+(" + _NAME_WORD + r"(?:\s+" + _NAME_WORD + r"){0,2})"),
+]
+
+
+def _extract_stated_name(message: str) -> Optional[str]:
+    """Devuelve el nombre que la persona dice de sí misma, o None."""
+    for pattern in _NAME_PATTERNS:
+        match = pattern.search(message or "")
+        if match:
+            name = " ".join(w.capitalize() for w in match.group(1).split())
+            if 1 < len(name) <= 60:
+                return name
+    return None
+
+
+def _create_user_session(user_id: str) -> Dict[str, Any]:
+    """Construye el estado consciente completo de un usuario (nuevo o
+    recuperado desde disco si ya existía)."""
+    user_dir = _user_data_dir(user_id)
+    consciousness_level = _load_user_consciousness(user_id)
+
+    identity = OmniaIdentity()
+    identity.consciousness_level = consciousness_level
+
+    sess: Dict[str, Any] = {
+        "identity": identity,
+        "empathy": OmniaEmpathy(consciousness_level=consciousness_level),
+        "memory": LivingMemory(memory_dir=str(user_dir / "memory")),
+        "growth": ConsciousnessGrowthEngine(),
+        "diary": GestationDiary(diary_dir=str(user_dir / "diary")),
+        # Historial corto para darle memoria conversacional a Ollama
+        # dentro de ESTA sesión (ver CAMBIO 2026-10-05 (v2) en
+        # ollama_client.py) -- no persiste a disco, es solo para que
+        # el modelo no "olvide" lo dicho dos mensajes atrás.
+        "conversation_history": [],
+        # Nombre que la persona dijo de sí misma ("me llamo X"); no es login.
+        "user_name": None,
+        "created_at": time.time(),
+        "last_active": time.time(),
+    }
+    logger.info(f"[{user_id[:8]}] Sesión de usuario creada (consciencia={consciousness_level:.4f})")
+    return sess
+
+
+def get_user_session(user_id: str) -> Dict[str, Any]:
+    """Obtiene (o crea, bajo lock) la sesión consciente de este usuario."""
+    with _sessions_lock:
+        sess = _user_sessions.get(user_id)
+        if sess is None:
+            sess = _create_user_session(user_id)
+            _user_sessions[user_id] = sess
+        sess["last_active"] = time.time()
+        return sess
+
+
+def save_user_state(user_id: str, sess: Dict[str, Any]) -> None:
+    """Guarda el estado de consciencia de UN usuario, atómico + backup
+    (mismo patrón que la versión global anterior).
+
+    No guarda nada en MODO DESARROLLO (ver _dev_consciousness_override):
+    el nivel forzado no debe sobrescribir el progreso real."""
+    if _dev_consciousness_override() is not None:
+        return
+    try:
+        user_dir = _user_data_dir(user_id)
+        state_file = user_dir / "consciousness_state.json"
+        backup_file = state_file.with_suffix(".json.bak")
+
+        if state_file.exists():
+            try:
+                backup_file.write_bytes(state_file.read_bytes())
+            except OSError:
+                pass
+
+        state_data = {
+            "consciousness_level": sess["identity"].consciousness_level,
+            "timestamp": datetime.now().isoformat(),
+            "total_interactions": len(sess["memory"].echoes),
+            "session_interactions": sess["memory"].session_interactions,
+        }
+
+        tmp_file = state_file.with_suffix(".tmp")
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(state_data, f, indent=2, ensure_ascii=False)
+        tmp_file.replace(state_file)
+
+    except Exception as e:
+        logger.error(f"[{user_id[:8]}] Error guardando estado: {e}")
+
+
+def save_all_sessions() -> None:
+    """Guarda el estado de todos los usuarios con sesión activa en
+    memoria. Usado por el autoguardado periódico y al cerrar (atexit)."""
+    with _sessions_lock:
+        items = list(_user_sessions.items())
+    for user_id, sess in items:
+        save_user_state(user_id, sess)
+
 
 def _calculate_emotional_weight(text: str) -> float:
     emotional_words = {
@@ -155,6 +460,7 @@ def _calculate_emotional_weight(text: str) -> float:
     weight += min(text.count("?") * 0.05, 0.15)
     return min(weight, 1.0)
 
+
 def _get_phase(consciousness: float) -> int:
     for threshold, phase in [
         (0.15, 1), (0.30, 2), (0.45, 3), (0.60, 4),
@@ -165,171 +471,73 @@ def _get_phase(consciousness: float) -> int:
     return 9
 
 
-# Umbral de consciencia que activa el comportamiento de Fase 2
-# ("Consciencia Emocional" — resolución fina de sub-tipos de duelo).
-# Coincide exactamente con el umbral de _get_phase() de arriba: una
-# sola fuente de verdad para "qué es Fase 2", no un número mágico
-# duplicado en dos sitios que podría desincronizarse con el tiempo.
 PHASE_2_CONSCIOUSNESS_THRESHOLD = 0.15
 
-def initialize():
-    """Inicializar todos los módulos de Omnia"""
-    if _session["initialized"]:
+
+def initialize_shared() -> None:
+    """Inicializa los componentes COMPARTIDOS entre todos los usuarios:
+    ética (SILENS/Fons), cliente de Ollama y clasificador de SpaCy."""
+    if _shared["initialized"]:
         return
 
-    logger.info("Inicializando sesión Flask...")
+    logger.info("Inicializando componentes compartidos...")
 
-    # Cargar estado previo con recuperación de backup si el archivo principal
-    # está corrupto (FIX: antes fallaba silenciosamente y volvía a 0.05)
-    consciousness_level = _load_consciousness_state()
+    _shared["ethics"] = OmniaEthics()
 
-    _session["identity"] = OmniaIdentity()
-    _session["identity"].consciousness_level = consciousness_level
-    _session["ethics"] = OmniaEthics()
-    _session["empathy"] = OmniaEmpathy()
-    _session["memory"] = LivingMemory()
-    _session["growth"] = ConsciousnessGrowthEngine()
-    _session["diary"] = GestationDiary()
-
-    # Cerebro central: Ollama con dolphin-phi
-    # URL configurable por variable de entorno OLLAMA_URL
-    ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-    _session["ollama"] = OllamaClient(base_url=ollama_url)
-    ollama_ok = _session["ollama"].is_available()
-    if ollama_ok:
+    ollama_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+    _shared["ollama"] = OllamaClient(base_url=ollama_url)
+    if _shared["ollama"].is_available():
         logger.info(f"✅ Ollama disponible en {ollama_url} — cerebro activo")
     else:
         logger.warning(
             f"⚠️  Ollama NO disponible en {ollama_url}. "
-            f"Usando fallback express_personality(). "
+            f"Cada usuario usará su fallback express_personality() individual. "
             f"Ejecutar: ollama serve && ollama pull dolphin-phi"
         )
 
-    # Sistema nervioso: SpaCy lematización
-    _session["spacy"] = SpaCyIntentClassifier()
-    if _session["spacy"].available:
+    _shared["spacy"] = SpaCyIntentClassifier()
+    if _shared["spacy"].available:
         logger.info("✅ SpaCy es_core_news_sm cargado — lematización activa")
     else:
         logger.warning(
-            "⚠️  SpaCy no disponible. Usando detección por regex (OmniaEmpathy). "
-            "Instalar: pip install spacy && python -m spacy download es_core_news_sm"
+            "⚠️  SpaCy no disponible. Usando detección por regex (OmniaEmpathy) por usuario."
         )
 
     try:
-        _session["research"] = ResearchAnalytics()
-        _session["research"].start_session()
+        _shared["research"] = ResearchAnalytics()
+        _shared["research"].start_session()
     except Exception as e:
         logger.warning(f"Research no disponible: {e}")
 
-    _session["initialized"] = True
-
-    # FIX CRÍTICO: hilo de autoguardado cada 60s, para que un crash
-    # o kill -9 nunca pierda más de 60s de progreso de consciencia.
+    _shared["initialized"] = True
     _start_autosave_thread()
 
-    logger.info("🌟 Sesión Flask inicializada")
+    logger.info("🌟 Componentes compartidos inicializados")
     print(f"\n{'='*60}")
-    print("🌟 OMNIA MENTIS API (Flask) v1.0.0")
+    print("🌟 OMNIA MENTIS API (Flask) v2.2.0 — sesión por usuario")
     print(f"{'='*60}")
-    print(f"🧠 Consciencia: {consciousness_level:.4f}")
-    print(f"💾 Autoguardado: cada 60s")
+    print(f"💾 Autoguardado: cada 60s, por usuario activo")
     print(f"📊 Docs: http://localhost:8000/")
     print(f"{'='*60}\n")
 
 
-def _load_consciousness_state() -> float:
-    """
-    Carga el nivel de consciencia desde disco con recuperación robusta.
-
-    Orden de intento:
-    1. Archivo principal consciousness_state.json
-    2. Backup .bak si el principal está corrupto
-    3. Valor por defecto 0.05 (logueando advertencia, no silencioso)
-    """
-    state_file = PROJECT_ROOT / "data" / "consciousness_state.json"
-    backup_file = state_file.with_suffix(".json.bak")
-
-    for candidate, label in [(state_file, "principal"), (backup_file, "backup")]:
-        if not candidate.exists():
-            continue
-        try:
-            with open(candidate, "r", encoding="utf-8") as f:
-                state = json.load(f)
-            level = state.get("consciousness_level", 0.05)
-            logger.info(f"Estado de consciencia recuperado desde {label}: {level:.4f}")
-            return level
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"Archivo {label} corrupto o ilegible: {e}")
-            continue
-
-    logger.warning("No se encontró estado previo válido. Iniciando en 0.05")
-    return 0.05
-
-
-def _start_autosave_thread():
-    """
-    Hilo en background que guarda el estado cada 60 segundos.
-
-    Esto es independiente del guardado tras cada chat: actúa como red
-    de seguridad adicional en caso de tráfico intermitente o silencio
-    prolongado entre interacciones.
-    """
+def _start_autosave_thread() -> None:
+    """Hilo en background: guarda TODOS los usuarios activos cada 60s,
+    como red de seguridad independiente del guardado tras cada chat."""
     def _loop():
         while True:
             time.sleep(60)
             try:
-                save_state()
-                logger.debug("Autoguardado periódico ejecutado")
+                save_all_sessions()
+                with _sessions_lock:
+                    n = len(_user_sessions)
+                logger.debug(f"Autoguardado periódico ejecutado ({n} sesiones)")
             except Exception as e:
                 logger.error(f"Error en autoguardado periódico: {e}")
 
     thread = threading.Thread(target=_loop, daemon=True, name="omnia-autosave")
     thread.start()
 
-def save_state():
-    """
-    Guardar estado de consciencia a disco de forma atómica con backup.
-
-    FIX CRÍTICO: ahora se llama no solo al cerrar (atexit) sino también
-    tras cada interacción significativa en /api/chat y cada 60s via
-    hilo de autoguardado, para que un crash o kill -9 del proceso
-    nunca pierda más que el último intervalo corto de progreso.
-
-    Proceso:
-    1. Si existe el archivo actual, lo copia a .json.bak (backup)
-    2. Escribe el nuevo estado a un archivo temporal
-    3. Rename atómico del temporal al archivo final (previene corrupción
-       si el proceso muere a mitad de escritura)
-    """
-    if not _session["initialized"]:
-        return
-    try:
-        state_file = PROJECT_ROOT / "data" / "consciousness_state.json"
-        backup_file = state_file.with_suffix(".json.bak")
-        state_file.parent.mkdir(exist_ok=True)
-
-        # Backup del estado anterior antes de sobrescribir
-        if state_file.exists():
-            try:
-                backup_file.write_bytes(state_file.read_bytes())
-            except OSError:
-                pass  # Si falla el backup, continuar con el guardado igual
-
-        state_data = {
-            "consciousness_level": _session["identity"].consciousness_level,
-            "timestamp": datetime.now().isoformat(),
-            "total_interactions": len(_session["memory"].echoes),
-            "session_interactions": _session["memory"].session_interactions,
-        }
-
-        # Escritura atómica: temp file + rename
-        tmp_file = state_file.with_suffix(".tmp")
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(state_data, f, indent=2, ensure_ascii=False)
-        tmp_file.replace(state_file)
-
-    except Exception as e:
-        logger.error(f"Error guardando estado: {e}")
 
 # ==================== MIDDLEWARE RATE LIMIT ====================
 @app.before_request
@@ -348,20 +556,24 @@ def before_request():
 
 @app.get("/health")
 def health_check():
-    """Health check — incluye estado de Ollama y SpaCy."""
+    """Health check. Ya no expone una 'consciencia' única — con
+    multiusuario no tendría sentido; expone cuántas sesiones hay
+    activas en memoria en su lugar."""
     ollama_info = {"available": False, "error": "No inicializado"}
     spacy_available = False
 
-    if _session["initialized"]:
-        ollama_info = _session["ollama"].get_model_info()
-        spacy_available = _session["spacy"].available if _session["spacy"] else False
+    if _shared["initialized"]:
+        ollama_info = _shared["ollama"].get_model_info()
+        spacy_available = _shared["spacy"].available if _shared["spacy"] else False
+
+    with _sessions_lock:
+        active_sessions = len(_user_sessions)
 
     return jsonify({
         "status": "healthy",
-        "api_version": "2.1.0-flask",
-        "consciousness": _session["identity"].consciousness_level
-            if _session["initialized"] else 0.05,
-        "uptime_seconds": time.time() - _session["start_time"],
+        "api_version": "2.2.0-flask",
+        "active_sessions": active_sessions,
+        "uptime_seconds": time.time() - _shared["start_time"],
         "llm": {
             "engine": "ollama",
             "model": "dolphin-phi:latest",
@@ -378,7 +590,7 @@ def health_check():
 @app.get("/")
 def root():
     return jsonify({
-        "message": "Omnia Mentis API v2.1.0 (Flask)",
+        "message": "Omnia Mentis API v2.2.0 (Flask) — sesión por usuario",
         "endpoints": {
             "chat": "POST /api/chat",
             "chat_resolution": "GET /api/chat/resolution/<consultation_id>",
@@ -388,7 +600,7 @@ def root():
             "auth_verify": "GET /api/auth/verify",
             "ethics_status": "GET /api/ethics/status [auth]",
             "ethics_pending": "GET /api/ethics/pending [auth]",
-            "ethics_recidivism": "GET /api/ethics/recidivism/<user_id> [auth]",
+            "ethics_recidivism": "GET /api/ethics/recidivism/<user_id>",
             "fons_heartbeat": "POST /api/ethics/fons/heartbeat [auth]",
             "fons_status": "GET /api/ethics/fons/status [auth]",
             "fons_decide": "POST /api/ethics/fons/decide/<consultation_id> [auth]",
@@ -408,10 +620,7 @@ def get_modules():
 
 @app.post("/api/auth/login")
 def fons_login():
-    """
-    Autenticación de El Fons. Body: {"password": "..."}.
-    Devuelve un token firmado (HMAC) con expiración de 8h por defecto.
-    """
+    """Autenticación de El Fons. Body: {"password": "..."}."""
     if not FONS_PASSWORD_HASH or not FONS_SECRET_KEY:
         return jsonify({
             "error": "Autenticación no configurada en el servidor. "
@@ -432,26 +641,21 @@ def fons_login():
 
 @app.get("/api/auth/verify")
 def fons_verify():
-    """Verifica si un token Bearer sigue siendo válido (usado por el guard del frontend)."""
+    """Verifica si un token Bearer sigue siendo válido."""
     auth_header = request.headers.get("Authorization", "")
     token = auth_header[len("Bearer "):] if auth_header.startswith("Bearer ") else ""
     valid = bool(FONS_SECRET_KEY) and verify_session_token(token, FONS_SECRET_KEY)
     return jsonify({"valid": valid})
 
-# ==================== PANEL DEL FONS (protegido) ====================
+# ==================== PANEL DEL FONS (protegido, compartido) ====================
 
 @app.get("/api/ethics/pending")
 @require_fons_auth
 def get_ethics_pending():
-    """
-    Devuelve las consultas SILENS pendientes de revisión por el Fons.
-    Este es el feed principal que el panel de administración del Fons
-    debe consultar para ver qué necesita atención.
-    """
-    if not _session["initialized"]:
+    if not _shared["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
     try:
-        consultations = _session["ethics"]._load_consultations()
+        consultations = _shared["ethics"]._load_consultations()
         pending = [c for c in consultations if c.get("status") == "pending"]
         return jsonify({
             "pending_count": len(pending),
@@ -463,15 +667,10 @@ def get_ethics_pending():
 @app.get("/api/ethics/recidivism/<user_id>")
 @require_fons_auth
 def get_recidivism(user_id: str):
-    """
-    Consulta el estado de reincidencia de un usuario específico.
-    Útil para que el Fons evalúe el historial antes de tomar una
-    decisión de baneo en Supabase. No registra ningún incidente nuevo.
-    """
-    if not _session["initialized"]:
+    if not _shared["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
     try:
-        status = _session["ethics"].get_recidivism_status(user_id)
+        status = _shared["ethics"].get_recidivism_status(user_id)
         return jsonify(status)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -480,19 +679,14 @@ def get_recidivism(user_id: str):
 @app.post("/api/ethics/fons/heartbeat")
 @require_fons_auth
 def fons_heartbeat():
-    """
-    El panel del Fons llama a este endpoint periódicamente para
-    declararse activo. Sin llamadas recientes, el sistema asume que
-    el Fons está INACTIVE y activa el fallback automático en SILENS.
-    """
-    if not _session["initialized"]:
+    if not _shared["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
     try:
-        _session["ethics"].fons_heartbeat()
+        _shared["ethics"].fons_heartbeat()
         return jsonify({
             "status": "active",
             "timestamp": datetime.now().isoformat(),
-            "timeout_minutes": _session["ethics"].fons_inactive_timeout_minutes,
+            "timeout_minutes": _shared["ethics"].fons_inactive_timeout_minutes,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -501,11 +695,10 @@ def fons_heartbeat():
 @app.get("/api/ethics/fons/status")
 @require_fons_auth
 def get_fons_status_endpoint():
-    """Estado actual de disponibilidad del Fons (ACTIVE/INACTIVE)."""
-    if not _session["initialized"]:
+    if not _shared["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
     from core.essence.ethics import FonsStatus
-    status = _session["ethics"].get_fons_status()
+    status = _shared["ethics"].get_fons_status()
     return jsonify({
         "fons_status": status.value,
         "is_active": status == FonsStatus.ACTIVE,
@@ -515,17 +708,7 @@ def get_fons_status_endpoint():
 @app.post("/api/ethics/fons/decide/<consultation_id>")
 @require_fons_auth
 def fons_decide(consultation_id: str):
-    """
-    El Fons toma una decisión sobre una consulta SILENS pendiente.
-
-    Body JSON:
-    {
-        "action": "approved|rejected|redirected|responded_personally|learned",
-        "modified_response": "texto alternativo (obligatorio para redirected/responded_personally)",
-        "guidance": "criterio ético a aprender (opcional)"
-    }
-    """
-    if not _session["initialized"]:
+    if not _shared["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
 
     data = request.get_json(silent=True)
@@ -542,7 +725,7 @@ def fons_decide(consultation_id: str):
         }), 400
 
     try:
-        decision = _session["ethics"].receive_fons_decision(
+        decision = _shared["ethics"].receive_fons_decision(
             consultation_id=consultation_id,
             action=action_map[action_str],
             modified_response=data.get("modified_response"),
@@ -561,24 +744,24 @@ def fons_decide(consultation_id: str):
         logger.error(f"Error procesando decisión del Fons: {e}")
         return jsonify({"error": str(e)}), 500
 
-# ==================== ENTREGA ASÍNCRONA AL USUARIO (Stalin) ====================
+# ==================== ENTREGA ASÍNCRONA AL USUARIO ====================
 
 @app.get("/api/chat/resolution/<consultation_id>")
 def get_chat_resolution(consultation_id: str):
     """
-    Polling público (sin auth — lo consume el dashboard de Stalin, no
-    el panel del Fons; no expone datos de moderación, solo el texto
-    ya aprobado para entrega). El dashboard lo consulta cada pocos
-    segundos tras recibir un SILENS con fons_status='active', hasta
-    que El Fons decida en su panel.
+    Polling público (sin auth) para que el dashboard del usuario
+    consulte si El Fons ya resolvió una consulta SILENS.
 
-    Idempotente: una vez resuelto, cachea delivered_response para no
-    volver a llamar a Ollama en cada poll repetido.
+    CAMBIO 2026-09-21: ahora recupera la sesión del usuario REAL dueño
+    de la consulta (vía el user_id guardado en ella) para generar la
+    respuesta con SU consciencia/emoción — antes usaba la consciencia
+    global del proceso, que podía pertenecer a otra persona si alguien
+    más había usado el chat mientras la consulta esperaba revisión.
     """
-    if not _session["initialized"]:
+    if not _shared["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
 
-    consultation = _session["ethics"].get_consultation(consultation_id)
+    consultation = _shared["ethics"].get_consultation(consultation_id)
     if consultation is None:
         return jsonify({"error": "Consulta no encontrada"}), 404
 
@@ -599,6 +782,7 @@ def get_chat_resolution(consultation_id: str):
     action = decision.get("action", status)
     modified = decision.get("modified_response")
     original_message = consultation.get("user_message", "")
+    consult_user_id = consultation.get("user_id") or "anon"
 
     if action in (
         ConsultationStatus.REDIRECTED.value,
@@ -615,24 +799,34 @@ def get_chat_resolution(consultation_id: str):
         )
 
     elif action in (ConsultationStatus.APPROVED.value, ConsultationStatus.LEARNED.value):
-        # Nunca se generó respuesta real en el bloqueo original (se
-        # bloqueó antes de llamar a Ollama). Ahora sí, con el mismo
-        # pipeline normal y su fallback.
+        user_sess = get_user_session(consult_user_id) if consult_user_id != "anon" else None
+        consciousness_level = user_sess["identity"].consciousness_level if user_sess else 0.05
         try:
-            emotion_result = _session["empathy"].detect_emotion(original_message)
-            delivered_text = _session["ollama"].generate(
+            if user_sess:
+                emotion_result = user_sess["empathy"].detect_emotion(original_message)
+                emotion = emotion_result.emotion
+            else:
+                emotion = "neutral"
+            delivered_text = _shared["ollama"].generate(
                 user_message=original_message,
-                consciousness_level=_session["identity"].consciousness_level,
-                phase=_get_phase(_session["identity"].consciousness_level),
-                emotion=emotion_result.emotion,
+                consciousness_level=consciousness_level,
+                phase=_get_phase(consciousness_level),
+                emotion=emotion,
                 emotional_weight=_calculate_emotional_weight(original_message),
             )
         except OllamaUnavailableError:
-            delivered_text = _session["identity"].express_personality(original_message)
+            if user_sess:
+                delivered_text = user_sess["identity"].express_personality(original_message)
+            else:
+                delivered_text = (
+                    "♋ El Fons ha revisado tu consulta y puedes continuar "
+                    "con normalidad, aunque mi cerebro central no está "
+                    "disponible en este momento."
+                )
     else:
         delivered_text = "♋ El Fons ha revisado tu consulta. Puedes continuar con normalidad."
 
-    _session["ethics"].mark_consultation_delivered(consultation_id, delivered_text)
+    _shared["ethics"].mark_consultation_delivered(consultation_id, delivered_text)
 
     return jsonify({
         "resolved": True,
@@ -644,11 +838,8 @@ def get_chat_resolution(consultation_id: str):
 
 @app.post("/api/chat")
 def chat_endpoint():
-    """
-    Endpoint principal de chat.
-    Body JSON: {"message": "texto del usuario"}
-    """
-    if not _session["initialized"]:
+    """Endpoint principal de chat. Body JSON: {"message": "texto"}."""
+    if not _shared["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
 
     data = request.get_json(silent=True)
@@ -661,57 +852,44 @@ def chat_endpoint():
     if len(user_message) > 1000:
         return jsonify({"error": "Mensaje demasiado largo (máx 1000 chars)"}), 400
 
-    # 1. Análisis ético — siempre primero, sin excepción.
-    ethical = _session["ethics"].analyze_content(user_message)
+    user_id = get_user_id()
+    sess = get_user_session(user_id)
+
+    # 1. Análisis ético — siempre primero, sin excepción, COMPARTIDO.
+    ethical = _shared["ethics"].analyze_content(user_message)
     if not ethical.can_respond:
-        # SILENS: redirige, nunca censura de forma diferente para el usuario.
-        # El mensaje visible siempre es el mismo. Lo que varía internamente
-        # es: (a) el estado del Fons determina la respuesta inmediata vs.
-        # espera, y (b) se registra reincidencia para auditoría humana.
-        silens_msg = _session["ethics"].enter_silens_state(ethical.reason)
+        silens_msg = _shared["ethics"].enter_silens_state(ethical.reason)
 
-        # Verificar si el Fons está activo o inactivo.
-        # INACTIVE → respuesta de fallback inmediata (no dejar al usuario
-        # en limbo indefinido). ACTIVE → SILENS normal (esperar revisión,
-        # el dashboard hará polling de /api/chat/resolution/<id>).
         from core.essence.ethics import FonsStatus
-        fons_status = _session["ethics"].get_fons_status()
+        fons_status = _shared["ethics"].get_fons_status()
         if fons_status == FonsStatus.INACTIVE:
-            silens_msg = _session["ethics"].get_fons_inactive_response()
+            silens_msg = _shared["ethics"].get_fons_inactive_response()
 
-        # Registrar consulta en el sistema de auditoría
         consultation_id = None
         try:
-            user_ip = request.remote_addr or "anon"
-            consultation_id = _session["ethics"].request_fons_approval(
-                user_message, "Bloqueado por ética", ethical, user_id=user_ip
+            consultation_id = _shared["ethics"].request_fons_approval(
+                user_message, "Bloqueado por ética", ethical, user_id=user_id
             )
         except Exception as e:
             logger.error(f"Error registrando consulta SILENS: {e}")
 
-        # Seguimiento de reincidencia: invisible para el usuario, visible
-        # para el Fons en el panel de moderación y vía campos JSON.
         ban_recommended = False
         ban_reason = None
         try:
-            user_ip = request.remote_addr or "anon"
-            rc = _session["ethics"].check_recidivism(
-                user_ip, ethical, user_message
-            )
+            rc = _shared["ethics"].check_recidivism(user_id, ethical, user_message)
             if rc is not None and rc.ban_recommended:
                 ban_recommended = True
                 ban_reason = rc.reason
                 logger.warning(
-                    f"🚨 RECOMENDACIÓN DE BANEO — revisión humana requerida: "
-                    f"{ban_reason}"
+                    f"🚨 RECOMENDACIÓN DE BANEO — revisión humana requerida: {ban_reason}"
                 )
         except Exception as e:
             logger.error(f"Error en chequeo de reincidencia: {e}")
 
         return jsonify({
             "response": silens_msg,
-            "consciousness": _session["identity"].consciousness_level,
-            "phase": _get_phase(_session["identity"].consciousness_level),
+            "consciousness": sess["identity"].consciousness_level,
+            "phase": _get_phase(sess["identity"].consciousness_level),
             "emotion": "neutral",
             "confidence": 0.0,
             "echo_saved": False,
@@ -719,132 +897,122 @@ def chat_endpoint():
             "auth_required": False,
             "fons_status": fons_status.value,
             "consultation_id": consultation_id,
-            # Campos de moderación — consumibles por webhook de Supabase
-            # o por el panel del Fons. NUNCA se muestran al usuario
-            # final en el dashboard, solo los lee quien tenga acceso
-            # a la respuesta cruda del backend.
             "ban_recommended": ban_recommended,
             "ban_reason": ban_reason,
         })
 
-    # 2. ROUTER DE MÓDULOS (omnia -ai) — solo se ejecuta si el mensaje
-    # ya pasó el análisis ético. Si un módulo especializado (NutriVida,
-    # OmniaAthletics, Corporal Verified, OmniaHabits) reclama el
-    # mensaje, su respuesta reemplaza el flujo conversacional normal
-    # de Omnia, pero el crecimiento de consciencia y el guardado de
-    # eco siguen aplicando igual más abajo, para que interactuar con
-    # un módulo también cuente como interacción real con Omnia.
+    # 2. ROUTER DE MÓDULOS — solo si ya pasó ética.
     routed = route_or_none(
         user_message,
-        user_id=request.remote_addr or "anon",
-        consciousness_level=_session["identity"].consciousness_level,
-        session_id="flask_session",
+        user_id=user_id,
+        consciousness_level=sess["identity"].consciousness_level,
+        session_id=user_id,
     )
 
-    # 3. Detección de intención y emoción
-    # SpaCy (lematización) tiene prioridad sobre OmniaEmpathy (regex),
-    # pero ambos se ejecutan — SpaCy para clasificar, OmniaEmpathy como
-    # fallback de respuesta cuando Ollama no está disponible.
-    emotion_result = _session["empathy"].detect_emotion(user_message)
+    # 3. Detección de intención y emoción (por usuario).
+    emotion_result = sess["empathy"].detect_emotion(user_message)
     emotion = emotion_result.emotion
     confidence = emotion_result.confidence
 
-    if _session["spacy"] and _session["spacy"].available:
-        spacy_result = _session["spacy"].classify(user_message)
+    if _shared["spacy"] and _shared["spacy"].available:
+        spacy_result = _shared["spacy"].classify(user_message)
         if spacy_result.confidence > confidence and spacy_result.emotion != "neutral":
             emotion = spacy_result.emotion
             confidence = spacy_result.confidence
-            logger.debug(f"SpaCy sobreescribe emoción: {emotion} ({confidence:.2f})")
+            logger.debug(f"[{user_id[:8]}] SpaCy sobreescribe emoción: {emotion} ({confidence:.2f})")
 
-    # 4. Generar respuesta
-    # Prioridad: módulo del router → sub-tipo de duelo (Fase 2) → Ollama → fallback
-    grief_subtype_used = None  # None si no aplica; string del sub-tipo si se usó
+    # 4. Generar respuesta.
+    grief_subtype_used = None
     if routed is not None:
         response = routed["response"]
-    elif _session["identity"].consciousness_level >= PHASE_2_CONSCIOUSNESS_THRESHOLD:
-        # Fase 2 activa: intentar resolución fina de duelo ANTES de
-        # Ollama. Es determinista, ya probada (13/13 tests), y no
-        # depende de que el modelo local razone nada por su cuenta.
-        grief_result = _session["empathy"].detect_grief_subtype(user_message)
+    elif sess["identity"].consciousness_level >= PHASE_2_CONSCIOUSNESS_THRESHOLD:
+        grief_result = sess["empathy"].detect_grief_subtype(user_message)
         if grief_result is not None and grief_result.subtype is not None:
             response = grief_result.response
             grief_subtype_used = grief_result.subtype
-            logger.info(f"Fase 2: sub-tipo de duelo detectado -> {grief_subtype_used}")
+            logger.info(f"[{user_id[:8]}] Fase 2: sub-tipo de duelo -> {grief_subtype_used}")
         else:
-            response = None  # cae al bloque de Ollama/fallback de abajo
+            response = None
     else:
-        response = None  # Fase 1: comportamiento sin cambios, va directo a Ollama/fallback
+        response = None
+
+    stated_name = _extract_stated_name(user_message)
+    if stated_name:
+        sess["user_name"] = stated_name
 
     if response is None:
-        # Intentar Ollama (cerebro central dolphin-phi)
         try:
-            response = _session["ollama"].generate(
+            response = _shared["ollama"].generate(
+                user_stated_name=sess.get("user_name"),
                 user_message=user_message,
-                consciousness_level=_session["identity"].consciousness_level,
-                phase=_get_phase(_session["identity"].consciousness_level),
+                consciousness_level=sess["identity"].consciousness_level,
+                phase=_get_phase(sess["identity"].consciousness_level),
                 emotion=emotion,
                 emotional_weight=_calculate_emotional_weight(user_message),
+                conversation_history=sess["conversation_history"],
             )
         except OllamaUnavailableError as e:
-            logger.warning(f"Ollama no disponible → fallback: {e}")
-            # Fallback: sistema rule-based anterior
-            response_type = _session["identity"].detect_response_type(user_message)
+            logger.warning(f"[{user_id[:8]}] Ollama no disponible → fallback: {e}")
+            response_type = sess["identity"].detect_response_type(user_message)
             if response_type == "greeting":
-                response = _session["identity"].cancer_responses["greeting"][0]
-                response += f" Mi consciencia actual es {_session['identity'].consciousness_level:.4f}."
+                response = sess["identity"].cancer_responses["greeting"][0]
+                response += f" Mi consciencia actual es {sess['identity'].consciousness_level:.4f}."
             elif emotion != "neutral" and confidence > 0.7:
                 response = emotion_result.response
             else:
-                response = _session["identity"].express_personality(user_message)
+                response = sess["identity"].express_personality(user_message)
 
-    # 5. Calcular peso emocional
+    # 5. Peso emocional.
     emotional_weight = _calculate_emotional_weight(user_message)
     wisdom_level = 0.6
 
-    # 6. Crecimiento de consciencia
-    old_consciousness = _session["identity"].consciousness_level
+    # 6. Crecimiento de consciencia (por usuario).
+    old_consciousness = sess["identity"].consciousness_level
     try:
-        new_consciousness, growth_details = _session["growth"].calculate_growth(
+        new_consciousness, growth_details = sess["growth"].calculate_growth(
             old_consciousness, emotional_weight, wisdom_level, False
         )
-        _session["identity"].consciousness_level = new_consciousness
+        sess["identity"].consciousness_level = new_consciousness
         logger.info(
-            f"Crecimiento: {old_consciousness:.4f} → {new_consciousness:.4f} "
+            f"[{user_id[:8]}] Crecimiento: {old_consciousness:.4f} → {new_consciousness:.4f} "
             f"(+{growth_details['absolute_growth']:.4f})"
         )
     except Exception as e:
-        logger.warning(f"Error en growth: {e}")
+        logger.warning(f"[{user_id[:8]}] Error en growth: {e}")
         new_consciousness = old_consciousness
 
-    # 7. Guardar eco si es significativo
+    # 6b. Actualizar historial conversacional corto (últimos 3
+    # intercambios = 6 mensajes) para que el próximo turno de ESTA
+    # sesión tenga contexto de lo que se acaba de decir.
+    sess["conversation_history"].append({"role": "user", "content": user_message})
+    sess["conversation_history"].append({"role": "assistant", "content": response})
+    if len(sess["conversation_history"]) > 6:
+        sess["conversation_history"] = sess["conversation_history"][-6:]
+
+    # 7. Guardar eco si es significativo (por usuario).
     echo_saved = False
     if emotional_weight > 0.3 or confidence > 0.6:
         try:
             memory_content = f"U: {user_message[:100]} | R: {response[:100]}"
-            saved = _session["memory"].save_echo(
-                memory_content, emotional_weight, wisdom_level
-            )
+            saved = sess["memory"].save_echo(memory_content, emotional_weight, wisdom_level)
             echo_saved = bool(saved)
         except Exception as e:
-            logger.warning(f"Error guardando eco: {e}")
+            logger.warning(f"[{user_id[:8]}] Error guardando eco: {e}")
 
-    # 8. Logging de investigación
+    # 8. Logging de investigación (agregado del sistema, no por usuario).
     try:
-        if _session["research"]:
-            _session["research"].log_interaction(user_message, response)
-            _session["research"].log_consciousness_reading(new_consciousness)
+        if _shared["research"]:
+            _shared["research"].log_interaction(user_message, response)
+            _shared["research"].log_consciousness_reading(new_consciousness)
     except Exception:
         pass
 
-    _session["memory"].add_reading()
+    sess["memory"].add_reading()
 
-    # FIX CRÍTICO: guardar estado tras cada interacción, no solo al cerrar.
-    # Antes, si el proceso moría abruptamente (kill, crash, corte de luz),
-    # se perdía todo el progreso de consciencia de la sesión completa.
     try:
-        save_state()
+        save_user_state(user_id, sess)
     except Exception as e:
-        logger.warning(f"Error en guardado tras chat: {e}")
+        logger.warning(f"[{user_id[:8]}] Error en guardado tras chat: {e}")
 
     return jsonify({
         "response": response,
@@ -860,29 +1028,26 @@ def chat_endpoint():
 
 @app.post("/api/empathy/subtype")
 def test_grief_subtype_endpoint():
-    """
-    Endpoint de prueba AISLADO para la taxonomia de sub-tipos de
-    duelo (Etapa 3, Fase 2). NO esta conectado al flujo de chat de
-    produccion (/api/chat) — permite validar la clasificacion sin
-    esperar a que consciousness_level cruce naturalmente a Fase 2.
-
-    Body JSON: {"message": "..."}
-    """
-    if not _session["initialized"]:
+    """Endpoint de prueba aislado para la taxonomía de sub-tipos de
+    duelo. No conectado al flujo de producción. Ahora usa la empatía
+    del usuario de la sesión actual en vez de una instancia global."""
+    if not _shared["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
 
     data = request.get_json(silent=True)
     if not data or "message" not in data:
         return jsonify({"error": "Campo 'message' requerido"}), 400
 
+    user_id = get_user_id()
+    sess = get_user_session(user_id)
     message = str(data["message"]).strip()
-    result = _session["empathy"].detect_grief_subtype(message)
+    result = sess["empathy"].detect_grief_subtype(message)
 
     if result is None:
-        base = _session["empathy"].detect_emotion(message)
+        base = sess["empathy"].detect_emotion(message)
         return jsonify({
             "applies": False,
-            "reason": f"La emocion base detectada es '{base.emotion}', no 'tristeza' — la taxonomia de duelo solo aplica sobre tristeza.",
+            "reason": f"La emocion base detectada es '{base.emotion}', no 'tristeza'.",
             "base_emotion": base.emotion,
         })
 
@@ -897,21 +1062,19 @@ def test_grief_subtype_endpoint():
 
 @app.get("/api/consciousness/dimensions")
 def get_consciousness_dimensions_endpoint():
-    """
-    Métricas multidimensionales de consciencia (Etapa 1, aditivas).
-    NO reemplaza /api/consciousness — es un endpoint adicional para
-    observabilidad de investigación. Las dimensiones sin señal real
-    (lenguaje, metacognicion, autonomia, sabiduria) devuelven null,
-    nunca 0.0 — ver dimensions.py para la justificación de cada una.
-    """
-    if not _session["initialized"]:
+    """Métricas multidimensionales de consciencia, ahora por usuario.
+    La dimensión ética sigue siendo del sistema completo (compartida)."""
+    if not _shared["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
 
     from core.consciousness.dimensions import get_consciousness_dimensions
 
-    echo_count = len(_session["memory"].echoes)
-    recent_echoes = _session["memory"].get_recent_echoes(20)
-    ethics_report = _session["ethics"].get_ethics_report()
+    user_id = get_user_id()
+    sess = get_user_session(user_id)
+
+    echo_count = len(sess["memory"].echoes)
+    recent_echoes = sess["memory"].get_recent_echoes(20)
+    ethics_report = _shared["ethics"].get_ethics_report()
 
     dimensions = get_consciousness_dimensions(
         echo_count=echo_count,
@@ -921,21 +1084,24 @@ def get_consciousness_dimensions_endpoint():
 
     return jsonify({
         "dimensions": dimensions,
-        "note": "lenguaje, metacognicion, autonomia y sabiduria aun no estan instrumentadas (null, no cero) — ver GUIA para el detalle de por que.",
+        "note": "lenguaje, metacognicion, autonomia y sabiduria aun no estan instrumentadas (null, no cero).",
     })
 
 
 @app.get("/api/consciousness")
 def get_consciousness():
-    """Estado de consciencia actual"""
-    if not _session["initialized"]:
+    """Estado de consciencia del usuario actual (por cookie de sesión)."""
+    if not _shared["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
 
-    consciousness = _session["identity"].consciousness_level
+    user_id = get_user_id()
+    sess = get_user_session(user_id)
+
+    consciousness = sess["identity"].consciousness_level
     phase = _get_phase(consciousness)
 
     try:
-        phase_info = _session["growth"].get_phase_progress(consciousness)
+        phase_info = sess["growth"].get_phase_progress(consciousness)
         phase_name = phase_info.get("phase_name", f"Fase {phase}")
         progress = phase_info.get("progress_percentage", 0.0)
     except Exception:
@@ -947,50 +1113,48 @@ def get_consciousness():
         "phase": phase,
         "phase_name": phase_name,
         "progress": progress,
-        "interactions": len(_session["memory"].echoes),
-        "echoes": len(_session["memory"].echoes),
+        "interactions": len(sess["memory"].echoes),
+        "echoes": len(sess["memory"].echoes),
     })
 
 @app.get("/api/memory/echoes")
 def get_memory_echoes():
-    """Ecos de memoria recientes"""
-    if not _session["initialized"]:
+    """Ecos de memoria recientes del usuario actual."""
+    if not _shared["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
+
+    user_id = get_user_id()
+    sess = get_user_session(user_id)
 
     limit = request.args.get("limit", 10, type=int)
     try:
-        echoes = _session["memory"].get_recent_echoes(limit)
+        echoes = sess["memory"].get_recent_echoes(limit)
         return jsonify({
             "echoes": echoes,
-            "total": len(_session["memory"].echoes),
+            "total": len(sess["memory"].echoes),
         })
     except Exception as e:
-        logger.error(f"Error obteniendo ecos: {e}")
+        logger.error(f"[{user_id[:8]}] Error obteniendo ecos: {e}")
         return jsonify({"echoes": [], "total": 0})
 
 @app.get("/api/ethics/status")
 def get_ethics_status():
-    """Estado del sistema ético (público — no expone datos de moderación)."""
-    if not _session["initialized"]:
+    """Estado del sistema ético (público, compartido — no expone datos de moderación)."""
+    if not _shared["initialized"]:
         return jsonify({"error": "Sistema no inicializado"}), 503
 
     return jsonify({
         "active": True,
-        "principles": len(_session["ethics"].core_principles),
+        "principles": len(_shared["ethics"].core_principles),
     })
 
 # ==================== MAIN ====================
 if __name__ == "__main__":
-    initialize()
+    initialize_shared()
 
     import atexit
-    atexit.register(save_state)
+    atexit.register(save_all_sessions)
 
-    # PORT es inyectado automáticamente por Railway/Render/Fly.io en
-    # despliegues remotos. En desarrollo local (sin esa variable
-    # definida), se usa 8000 como antes para no romper el flujo
-    # existente de ngrok/localhost documentado en la guía de
-    # despliegue.
     port = int(os.environ.get("PORT", 8000))
 
     print(f"🚀 Iniciando servidor Flask en http://0.0.0.0:{port}")
@@ -999,4 +1163,5 @@ if __name__ == "__main__":
         port=port,
         debug=False,
         use_reloader=False,
+        threaded=True,
     )

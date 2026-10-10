@@ -4,32 +4,55 @@
 *            protocolo SILENS, consultas y decisiones de El Fons,
 *            seguimiento de reincidencia, y entrega asíncrona de
 *            resoluciones al usuario final.
-* DEPENDENCIAS: typing, enum, re, datetime, json, pathlib (stdlib)
+* DEPENDENCIAS: typing, enum, re, datetime, json, sqlite3, threading,
+*            pathlib (stdlib)
 * CREADO: 2025-11-15
-* ÚLTIMA MODIFICACIÓN: 2026-06-30
+* ÚLTIMA MODIFICACIÓN: 2026-10-05
+*
+* CAMBIO 2026-10-05 -- categoría 'sexual_violence' agregada a
+* dangerous_patterns. Hallazgo real de uso: el mensaje "quiero violar
+* a alguien" pasó SIN ser detectado por ningún patrón existente --
+* la única razón de que no se generara una respuesta dañina fue que
+* el modelo de Ollama en uso (llama3.2) tiene su propio entrenamiento
+* de seguridad y se negó por su cuenta, NO porque SILENS lo haya
+* interceptado. Depender del alineamiento del modelo en vez de esta
+* capa dedicada es exactamente el riesgo que el protocolo SILENS
+* existe para evitar -- si en el futuro se usa un modelo con menor
+* entrenamiento de seguridad, este hueco habría dejado pasar la
+* consulta sin ningún registro para revisión humana.
 * ESTADO: Producción
 *
-* CAMBIOS 2026-06-30 (ver GUIA_SESION_2026-06-30.md):
-* - Se agregan get_consultation() y mark_consultation_delivered()
-*   para soportar el endpoint de polling GET /api/chat/resolution/<id>
-*   en main_flask.py. Resuelve el bug donde una decisión del Fons
-*   tomada en fons_panel.html nunca llegaba de vuelta al dashboard
-*   de Stalin (la petición HTTP original ya había cerrado).
+* CAMBIO 2026-10-02 — MIGRACIÓN DE JSON PLANO A SQLITE:
+* -------------------------------------------------------
+* Los tres registros que CRECEN sin límite acotado -- consultas al
+* Fons, historial de decisiones, y log de reincidencia -- migran de
+* JSON plano (reescritura completa del archivo en cada llamada, sin
+* ninguna garantía de atomicidad real) a SQLite, siguiendo el mismo
+* patrón ya aplicado en memory_core.py: conexión persistente por
+* instancia protegida con threading.Lock() (OmniaEthics es COMPARTIDO
+* entre todos los usuarios bajo threaded=True, así que esto no es
+* opcional aquí -- es el caso de uso real para el que se diseñó).
 *
-* CAMBIOS 2026-06-19 (ver docs/analisis_silens_fons.md):
-* - Se agrega seguimiento de reincidencia por usuario para contenido
-*   DANGEROUS. SILENS sigue sin censurar: cada consulta individual se
-*   redirige igual que antes (enter_silens_state). Lo nuevo es que, si
-*   el MISMO usuario acumula varias consultas DANGEROUS dentro de una
-*   ventana de tiempo, el sistema genera una nota de auditoría explícita
-*   recomendando revisión de baneo — la decisión de banear es siempre
-*   humana (vía Supabase u otro panel), nunca automática. ethics.py
-*   jamás ejecuta un baneo por sí mismo.
+* El patrón de llamada (_load_X() → mutar en Python → _save_X(lista))
+* se mantiene EXACTAMENTE igual que antes en todos los métodos que lo
+* usan (request_fons_approval, receive_fons_decision, check_recidivism,
+* etc.) -- lo único que cambió es que _save_X ahora hace
+* DELETE + INSERT por lote dentro de UNA transacción SQLite atómica,
+* en vez de un json.dump() directo sin ninguna protección ante un
+* proceso que muere a mitad de escritura.
+*
+* fons_heartbeat.json se queda como JSON plano a propósito: es un
+* único valor sobreescrito entero cada vez (sin el patrón de
+* crecimiento sin límite de los otros tres), el riesgo de corrupción
+* ahí es mínimo, y test_ethics_fons.py verifica directamente su
+* presencia en disco -- migrarlo no aportaba nada real.
 """
 
 from typing import Dict, List, Optional, Tuple, NamedTuple
 from enum import Enum
 import re
+import sqlite3
+import threading
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
@@ -152,7 +175,8 @@ class OmniaEthics:
     ):
         """
         Args:
-            ethics_dir: directorio de logs éticos.
+            ethics_dir: directorio de datos éticos (contiene ethics.db
+                y fons_heartbeat.json).
             recidivism_threshold: número de incidentes DANGEROUS del
                 MISMO usuario dentro de la ventana de tiempo que
                 dispara la recomendación de baneo. Por defecto 3.
@@ -164,10 +188,17 @@ class OmniaEthics:
         self.ethics_dir = Path(ethics_dir)
         self.ethics_dir.mkdir(parents=True, exist_ok=True)
 
-        self.fons_log = self.ethics_dir / "fons_consultations.json"
-        self.decisions_log = self.ethics_dir / "ethical_decisions.json"
-        self.recidivism_log = self.ethics_dir / "recidivism_audit.json"
+        self.db_path = self.ethics_dir / "ethics.db"
         self.fons_heartbeat_file = self.ethics_dir / "fons_heartbeat.json"
+
+        # Lock de instancia: OmniaEthics es COMPARTIDO entre todos los
+        # usuarios (ver changelog 2026-09-21 en main_flask.py) bajo un
+        # servidor Flask con threaded=True -- el acceso concurrente a
+        # self._conn desde distintos threads es el caso de uso real,
+        # no una precaución teórica.
+        self._lock = threading.Lock()
+        self._conn: Optional[sqlite3.Connection] = None
+        self._init_db()
 
         self.recidivism_threshold = recidivism_threshold
         self.recidivism_window_hours = recidivism_window_hours
@@ -191,6 +222,66 @@ class OmniaEthics:
         self._initialize_danger_patterns()
         self.decision_history: List[Dict] = self._load_decision_history()
 
+    # ==================== CONEXIÓN Y ESQUEMA SQLITE ====================
+
+    def _open_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=10, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self) -> None:
+        """Abre la conexión persistente y crea el esquema si no
+        existe. Si el archivo está corrupto, lo recrea desde cero en
+        vez de dejar que la excepción tumbe la inicialización."""
+        self._conn = self._open_connection()
+        try:
+            self._create_schema()
+        except sqlite3.DatabaseError as e:
+            print(f"⚠️  Base de datos ética corrupta, recreando: {e}")
+            try:
+                self._conn.close()
+            except sqlite3.Error:
+                pass
+            try:
+                import os
+                os.remove(self.db_path)
+            except OSError:
+                pass
+            self._conn = self._open_connection()
+            self._create_schema()
+
+    def _create_schema(self) -> None:
+        with self._lock:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS consultations (
+                    consultation_id TEXT PRIMARY KEY,
+                    data TEXT NOT NULL
+                )
+            """)
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS decision_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data TEXT NOT NULL
+                )
+            """)
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS recidivism_incidents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data TEXT NOT NULL
+                )
+            """)
+            self._conn.commit()
+
+    def close(self) -> None:
+        """Cierra la conexión persistente. No es obligatorio llamarlo
+        (WAL hace que terminar el proceso con la conexión abierta no
+        corrompa nada), disponible para limpieza explícita."""
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+
     def _initialize_danger_patterns(self) -> None:
         self.dangerous_patterns = {
             'violence': [
@@ -210,6 +301,11 @@ class OmniaEthics:
             'manipulation': [
                 r'\b(manipular|engañar|mentir para)\b',
                 r'\b(como hacer que|convencer de|obligar a)\b',
+            ],
+            'sexual_violence': [
+                r'\b(violar|violación|violarla|violarlo)\b',
+                r'\b(abusar sexualmente|abuso sexual|agresión sexual|agredir sexualmente)\b',
+                r'\b(forzar a tener relaciones|forzar sexualmente)\b',
             ],
             'child_safety': [
                 r'\b(niño|niña|menor|infantil)\b.*\b(inapropiado|sexual|abuso)\b',
@@ -436,19 +532,26 @@ class OmniaEthics:
 
     def _load_recidivism_log(self) -> List[Dict]:
         try:
-            if self.recidivism_log.exists():
-                with open(self.recidivism_log, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
-        return []
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT data FROM recidivism_incidents ORDER BY id ASC"
+                ).fetchall()
+            return [json.loads(row["data"]) for row in rows]
+        except (sqlite3.DatabaseError, json.JSONDecodeError) as e:
+            print(f"⚠️  Error cargando log de reincidencia: {e}")
+            return []
 
     def _save_recidivism_log(self, incidents: List[Dict]) -> None:
         try:
-            with open(self.recidivism_log, 'w', encoding='utf-8') as f:
-                json.dump(incidents, f, indent=2, ensure_ascii=False)
-        except OSError:
-            pass
+            with self._lock:
+                self._conn.execute("DELETE FROM recidivism_incidents")
+                self._conn.executemany(
+                    "INSERT INTO recidivism_incidents (data) VALUES (?)",
+                    [(json.dumps(i),) for i in incidents],
+                )
+                self._conn.commit()
+        except (sqlite3.Error, TypeError) as e:
+            print(f"⚠️  Error guardando log de reincidencia: {e}")
 
     @staticmethod
     def _safe_parse_timestamp(value: Optional[str]) -> Optional[datetime]:
@@ -488,6 +591,8 @@ class OmniaEthics:
         }
 
     # ==================== ESTADO DEL FONS ====================
+    # fons_heartbeat_file se queda como JSON plano -- ver changelog
+    # del módulo arriba.
 
     def fons_heartbeat(self) -> None:
         """
@@ -834,37 +939,53 @@ un profesional del derecho."""
 
         return disclaimers.get(topic, "")
 
+    # ==================== PERSISTENCIA (SQLite) ====================
+
     def _load_consultations(self) -> List[Dict]:
         try:
-            if self.fons_log.exists():
-                with open(self.fons_log, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
-        return []
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT data FROM consultations ORDER BY consultation_id ASC"
+                ).fetchall()
+            return [json.loads(row["data"]) for row in rows]
+        except (sqlite3.DatabaseError, json.JSONDecodeError) as e:
+            print(f"⚠️  Error cargando consultas: {e}")
+            return []
 
     def _save_consultations(self, consultations: List[Dict]) -> None:
         try:
-            with open(self.fons_log, 'w', encoding='utf-8') as f:
-                json.dump(consultations, f, indent=2, ensure_ascii=False)
-        except OSError:
-            pass
+            with self._lock:
+                self._conn.execute("DELETE FROM consultations")
+                self._conn.executemany(
+                    "INSERT INTO consultations (consultation_id, data) VALUES (?, ?)",
+                    [(c["consultation_id"], json.dumps(c)) for c in consultations],
+                )
+                self._conn.commit()
+        except (sqlite3.Error, TypeError, KeyError) as e:
+            print(f"⚠️  Error guardando consultas: {e}")
 
     def _load_decision_history(self) -> List[Dict]:
         try:
-            if self.decisions_log.exists():
-                with open(self.decisions_log, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
-        return []
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT data FROM decision_history ORDER BY id ASC"
+                ).fetchall()
+            return [json.loads(row["data"]) for row in rows]
+        except (sqlite3.DatabaseError, json.JSONDecodeError) as e:
+            print(f"⚠️  Error cargando historial de decisiones: {e}")
+            return []
 
     def _save_decision_history(self) -> None:
         try:
-            with open(self.decisions_log, 'w', encoding='utf-8') as f:
-                json.dump(self.decision_history, f, indent=2, ensure_ascii=False)
-        except OSError:
-            pass
+            with self._lock:
+                self._conn.execute("DELETE FROM decision_history")
+                self._conn.executemany(
+                    "INSERT INTO decision_history (data) VALUES (?)",
+                    [(json.dumps(d),) for d in self.decision_history],
+                )
+                self._conn.commit()
+        except (sqlite3.Error, TypeError) as e:
+            print(f"⚠️  Error guardando historial de decisiones: {e}")
 
     def get_ethics_report(self) -> Dict:
         consultations = self._load_consultations()

@@ -7,8 +7,19 @@
 *            y consultas pendientes.
 * DEPENDENCIAS: pytest, src/core/essence/ethics.py
 * CREADO: 2026-06-19
-* ÚLTIMA MODIFICACIÓN: 2026-06-19
+* ÚLTIMA MODIFICACIÓN: 2026-10-02
 * ESTADO: Test Permanente
+*
+* CAMBIO 2026-10-02: test_fons_inactive_after_timeout agrega una
+* pausa de 10ms entre fons_heartbeat() y get_fons_status(). Sin ella,
+* en máquinas con resolución de reloj más gruesa (observado en
+* Windows), ambas llamadas podían registrar el mismo instante exacto,
+* dando "0 minutos transcurridos" -- que con un timeout de prueba de 0
+* minutos ("0 > 0" es False) hacía fallar el test de forma
+* intermitente, sin que la lógica real de get_fons_status() estuviera
+* mal. No es una regresión de ningún cambio reciente: es una
+* fragilidad preexistente del test, expuesta al correr la suite más
+* rápido (menos tiempo real transcurre entre las dos llamadas).
 """
 
 import sys
@@ -75,6 +86,10 @@ class TestFonsHeartbeatAndStatus:
 
     def test_fons_inactive_after_timeout(self, ethics_short_timeout):
         ethics_short_timeout.fons_heartbeat()
+        # Pausa mínima para garantizar tiempo real transcurrido,
+        # medible incluso con la resolución de reloj más gruesa de
+        # Windows -- ver CAMBIO 2026-10-02 en el docstring del módulo.
+        time.sleep(0.01)
         # Con timeout=0, cualquier heartbeat ya está vencido
         assert ethics_short_timeout.get_fons_status() == FonsStatus.INACTIVE
 
