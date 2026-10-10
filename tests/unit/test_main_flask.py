@@ -782,3 +782,32 @@ class TestRateTablePruning:
         ip = "9.9.9.9"
         assert all(flask_app.check_rate_limit(ip, max_req=3, window=60) for _ in range(3))
         assert flask_app.check_rate_limit(ip, max_req=3, window=60) is False
+
+
+# ---------------------------------------------------------------------------
+# SpaCy solo completa a OmniaEmpathy, nunca la contradice
+# ---------------------------------------------------------------------------
+
+class _SpacyResult:
+    def __init__(self, emotion, confidence):
+        self.emotion = emotion
+        self.confidence = confidence
+
+
+class TestSpacyOverridePolicy:
+    def test_spacy_fills_in_when_empathy_is_neutral_and_confident(self, flask_app):
+        assert flask_app._spacy_may_override("neutral", _SpacyResult("tristeza", 0.6)) is True
+
+    def test_spacy_never_overrides_an_emotion_empathy_already_found(self, flask_app):
+        assert flask_app._spacy_may_override("tristeza", _SpacyResult("amor", 1.0)) is False
+        assert flask_app._spacy_may_override("miedo", _SpacyResult("alegría", 1.0)) is False
+
+    def test_low_confidence_spacy_is_ignored(self, flask_app):
+        assert flask_app._spacy_may_override("neutral", _SpacyResult("tristeza", 0.49)) is False
+
+    def test_threshold_is_inclusive(self, flask_app):
+        t = flask_app.SPACY_MIN_CONFIDENCE
+        assert flask_app._spacy_may_override("neutral", _SpacyResult("tristeza", t)) is True
+
+    def test_spacy_neutral_never_overrides(self, flask_app):
+        assert flask_app._spacy_may_override("neutral", _SpacyResult("neutral", 1.0)) is False

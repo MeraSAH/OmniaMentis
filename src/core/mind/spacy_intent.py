@@ -7,8 +7,21 @@
 *            test_empathy.py::test_known_limitation_*).
 * DEPENDENCIAS: spacy, es_core_news_sm
 * CREADO: 2026-06-27
-* ÚLTIMA MODIFICACIÓN: 2026-06-27
+* ÚLTIMA MODIFICACIÓN: 2026-10-10
 * ESTADO: Producción
+*
+* CAMBIO 2026-10-10 — VOCABULARIO SIN AMBIGÜEDADES + ENTRADA SEGURA:
+* Los vocabularios incluían lemas que en español cotidiano casi nunca
+* expresan emoción: "querer" (amor) disparaba "amor" con "quiero saber
+* la hora"; "solo" (tristeza) con "solo quiero ayuda"; "perder"
+* (tristeza Y confusión) con "perdí las llaves". Como main_flask.py
+* usaba el resultado de SpaCy para pisar a OmniaEmpathy, estas
+* coincidencias falsas cambiaban la emoción enviada a Ollama. Se
+* eliminaron esos lemas (y las frases de varias palabras como
+* "no entender", que nunca podían coincidir con un lema suelto).
+* OmniaEmpathy ya cubre "te quiero" / "me siento solo" con patrones de
+* contexto. classify() ahora tolera None/espacios y errores internos
+* de SpaCy sin romper la petición.
 
 INSTALACIÓN (ejecutar en el venv de Windows):
     pip install spacy
@@ -44,10 +57,10 @@ logger = logging.getLogger(__name__)
 
 EMOTION_LEMMAS: dict[str, list[str]] = {
     "tristeza": [
-        "triste", "tristeza", "llorar", "llorar", "deprimir", "depresión",
+        "triste", "tristeza", "llorar", "deprimir", "depresión",
         "melancolía", "melancólico", "dolor", "pena", "sufrir", "sufrimiento",
-        "angustia", "angustiar", "desesperar", "desesperación", "perder",
-        "soledad", "solo", "vacío", "vaciar", "oscuridad",
+        "angustia", "angustiar", "desesperar", "desesperación",
+        "soledad", "vacío", "vaciar", "oscuridad",
     ],
     "alegría": [
         "feliz", "felicidad", "alegría", "alegre", "contento", "gozo",
@@ -60,7 +73,7 @@ EMOTION_LEMMAS: dict[str, list[str]] = {
         "inquieto", "inquietud", "tenso", "tensión", "agobiar", "abrumar",
     ],
     "amor": [
-        "amar", "amor", "querer", "cariño", "ternura", "adorar",
+        "amar", "amor", "cariño", "ternura", "adorar",
         "afecto", "apreciar", "apreciación", "cuidar", "proteger",
     ],
     "miedo": [
@@ -69,8 +82,8 @@ EMOTION_LEMMAS: dict[str, list[str]] = {
         "angustia", "angustiar", "peligro", "amenaza", "amenazar",
     ],
     "confusión": [
-        "confundir", "confusión", "confundido", "desorientar", "perder",
-        "perdido", "desorientado", "no entender", "incomprensión",
+        "confundir", "confusión", "confundido", "desorientar",
+        "desorientado", "incomprensión",
         "dudar", "duda", "incertidumbre", "caos",
     ],
     "frustración": [
@@ -166,8 +179,15 @@ class SpaCyIntentClassifier:
         if not self.available or self.nlp is None:
             return IntentResult(available=False)
 
-        doc = self.nlp(text.lower())
-        lemmas = [token.lemma_ for token in doc if not token.is_stop and token.is_alpha]
+        if not isinstance(text, str) or not text.strip():
+            return IntentResult(available=True)
+
+        try:
+            doc = self.nlp(text.lower())
+            lemmas = [token.lemma_ for token in doc if not token.is_stop and token.is_alpha]
+        except Exception as e:  # SpaCy nunca debe romper una petición
+            logger.warning(f"SpaCy falló al analizar el texto: {e}")
+            return IntentResult(available=False)
 
         emotion, emotion_score = self._score_category(lemmas, EMOTION_LEMMAS)
         intent, intent_score = self._score_category(lemmas, INTENT_LEMMAS)

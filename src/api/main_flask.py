@@ -9,6 +9,11 @@
 * CREADO: 2026-06-14
 * ÚLTIMA MODIFICACIÓN: 2026-10-10
 *
+* CAMBIO 2026-10-10 -- SPACY SOLO COMPLETA, NO CONTRADICE:
+*   SpaCy ya no pisa una emoción detectada por OmniaEmpathy; solo actúa
+*   cuando OmniaEmpathy devuelve "neutral" y la confianza de SpaCy es
+*   >= SPACY_MIN_CONFIDENCE (0.5). Ver _spacy_may_override().
+*
 * CAMBIO 2026-10-10 -- ENDURECIMIENTO DE SESIONES (límites y limpieza):
 *   Hallazgo real: durante el fallo de cookies se acumularon ~3000
 *   carpetas data/users/<id>/ (cada petición sin cookie creaba un
@@ -655,6 +660,22 @@ def save_all_sessions() -> None:
         save_user_state(user_id, sess)
 
 
+# SpaCy solo COMPLETA a OmniaEmpathy, nunca la contradice: OmniaEmpathy usa
+# evidencia con contexto (patrones, umbrales); SpaCy cuenta lemas sueltos.
+# Si OmniaEmpathy ya detectó una emoción, se respeta. SpaCy aporta solo
+# cuando OmniaEmpathy dice "neutral" y SpaCy tiene evidencia suficiente.
+SPACY_MIN_CONFIDENCE = 0.5
+
+
+def _spacy_may_override(current_emotion, spacy_result) -> bool:
+    """True si el resultado de SpaCy debe reemplazar la emoción actual."""
+    return (
+        current_emotion == "neutral"
+        and spacy_result.emotion != "neutral"
+        and spacy_result.confidence >= SPACY_MIN_CONFIDENCE
+    )
+
+
 def _calculate_emotional_weight(text: str) -> float:
     emotional_words = {
         "triste": 0.4, "feliz": 0.3, "ansioso": 0.3, "amor": 0.5,
@@ -1146,7 +1167,7 @@ def chat_endpoint():
 
     if _shared["spacy"] and _shared["spacy"].available:
         spacy_result = _shared["spacy"].classify(user_message)
-        if spacy_result.confidence > confidence and spacy_result.emotion != "neutral":
+        if _spacy_may_override(emotion, spacy_result):
             emotion = spacy_result.emotion
             confidence = spacy_result.confidence
             logger.debug(f"[{user_id[:8]}] SpaCy sobreescribe emoción: {emotion} ({confidence:.2f})")
