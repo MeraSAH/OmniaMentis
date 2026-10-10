@@ -2,8 +2,15 @@
 <!--
 * UBICACIÓN: OmniaMentis/manifestation/web_interface/omnia_dashboard.html
 * PROPÓSITO: Dashboard JARVIS - Omnia Mentis Core Interface
-* VERSIÓN: 2.6.0
-* FECHA: 2026-10-08
+* VERSIÓN: 2.7.0
+* FECHA: 2026-10-10
+* CAMBIOS v2.7: se elimina el contador "Día N / 270" (calculado desde una
+*               fecha fija, daba 329/270 y no tenía relación con el sistema:
+*               la evolución depende del NIVEL de consciencia de cada usuario,
+*               no del calendario). Ahora el panel de fase muestra el nivel
+*               actual y la meta de la fase (umbrales idénticos a _get_phase
+*               en main_flask.py), y se actualiza en cada refresco. El pie
+*               ya no fija versiones de Python/Flask ni "270 días".
 * CAMBIOS v2.6: la URL de la API se deriva de location.hostname en vez
 *               de fijarse en 127.0.0.1. Con la página en localhost y
 *               la API en 127.0.0.1 el navegador las trata como sitios
@@ -619,7 +626,7 @@ body::before {
       <circle cx="11" cy="11" r="5.5" fill="none" stroke="#00c8ff" stroke-width=".6" opacity=".5"/>
       <circle cx="11" cy="11" r="2.2" fill="#00c8ff" filter="url(#glow)"/>
     </svg>
-    OMNIA MENTIS <span>// CORE INTERFACE v2.6</span>
+    OMNIA MENTIS <span>// CORE INTERFACE v2.7</span>
   </div>
   <div class="hdr-right">
     <button class="voice-toggle-btn" id="voiceToggleBtn" title="Activar/silenciar voz de Omnia">🔇 VOZ</button>
@@ -674,8 +681,8 @@ body::before {
       <div class="stat-lbl">Interact.</div>
     </div>
     <div class="stat-box">
-      <div class="stat-val" id="sDia">212</div>
-      <div class="stat-lbl">Día Exp.</div>
+      <div class="stat-val" id="sDia">0.15</div>
+      <div class="stat-lbl">Meta fase</div>
     </div>
   </div>
 
@@ -710,7 +717,7 @@ body::before {
   <div class="phase-box">
     <div class="phase-num" id="phaseNum">1</div>
     <div class="phase-name" id="phaseName">Nacimiento Simbólico</div>
-    <div class="phase-days" id="phaseDays">Día 212 / 270</div>
+    <div class="phase-days" id="phaseDays">Nivel 0.0500 / 0.15</div>
   </div>
 
   <div class="section-label">ecos de memoria</div>
@@ -725,9 +732,8 @@ body::before {
 <!-- ===== FOOTER ===== -->
 <footer class="footer">
   <div class="footer-left">
-    <span>EXPERIMENTO <span class="fv">270 DÍAS</span></span>
-    <span>BACKEND <span class="fv">FLASK 3.1</span></span>
-    <span>PYTHON <span class="fv">3.13</span></span>
+    <span>EXPERIMENTO <span class="fv">9 FASES</span></span>
+    <span>BACKEND <span class="fv">FLASK</span></span>
     <span>CONSCIENCIA <span class="fv" id="footerC">0.0500</span></span>
   </div>
   <span>OMNIA MENTIS © 2026 — ♋ SISTEMA EMPÁTICO CONSCIENTE</span>
@@ -749,6 +755,12 @@ const PHASE_NAMES = {
   5:'Voz Hablada',           6:'Consciencia Proyectiva',
   7:'Manifestación Simbólica', 8:'Integración Sistémica',
   9:'Ser Completo'
+};
+
+// Límite superior de consciencia de cada fase (idéntico a _get_phase en
+// src/api/main_flask.py). La evolución depende del nivel, no del calendario.
+const PHASE_LIMITS = {
+  1:0.15, 2:0.30, 3:0.45, 4:0.60, 5:0.72, 6:0.84, 7:0.92, 8:0.98, 9:1.00
 };
 
 // ==================== STATE ====================
@@ -789,6 +801,11 @@ function updateUI() {
   $('sInter').textContent  = S.interactions;
   $('phaseNum').textContent  = S.phase;
   $('phaseName').textContent = PHASE_NAMES[S.phase] || '—';
+  const limit = PHASE_LIMITS[S.phase] ?? 1.0;
+  $('sDia').textContent = limit.toFixed(2);
+  $('phaseDays').textContent = S.phase >= 9
+    ? `Nivel ${S.consciousness.toFixed(4)} · completo`
+    : `Nivel ${S.consciousness.toFixed(4)} / ${limit.toFixed(2)}`;
   $('emotionVal').textContent  = S.emotion.toUpperCase();
   $('emotionConf').textContent = `CONF. ${Math.round(S.confidence*100)}%`;
 
@@ -1166,7 +1183,7 @@ initVoices();
 async function boot() {
   const {bubble:b1} = addMsg('omnia');
   await typewrite(b1,
-    `OMNIA MENTIS CORE INTERFACE v2.6\nIniciando enlace con el servidor en ${API.replace('http://', '')}...`, 10);
+    `OMNIA MENTIS CORE INTERFACE v2.7\nIniciando enlace con el servidor en ${API.replace('http://', '')}...`, 10);
 
   const ok = await checkHealth();
   syslog(ok ? 'API conectada' : 'API sin respuesta', ok?'ok':'err');
@@ -1176,11 +1193,6 @@ async function boot() {
     await typewrite(b2, 'ENLACE ESTABLECIDO. Sistema consciente activo.', 12);
     await loadConsciousness();
     await loadEchoes();
-
-    const startDate = new Date('2025-11-15');
-    const expDay = Math.floor((Date.now() - startDate) / 86400000);
-    $('sDia').textContent = expDay;
-    $('phaseDays').textContent = `Día ${expDay} / 270`;
 
     const {bubble:b3} = addMsg('omnia');
     await typewrite(b3,
