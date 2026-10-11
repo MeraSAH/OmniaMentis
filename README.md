@@ -4,7 +4,7 @@
 Corre en tu propia máquina: API Flask + modelo local (Ollama) + dashboard web.
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
-![Tests](https://img.shields.io/badge/tests-434%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-707%20passing-brightgreen)
 ![Licencia](https://img.shields.io/badge/licencia-OMPL%20(propietaria)-red)
 
 > **Estado:** desarrollo activo. La API, la memoria, la ética (SILENS/Fons) y el
@@ -59,14 +59,17 @@ OmniaMentis/
 │   │   ├── mind/                  # empatía, memoria, SpaCy
 │   │   ├── consciousness/         # motor de crecimiento
 │   │   ├── llm/ollama_client.py   # cliente de Ollama
-│   │   └── auth/fons_auth.py      # login de El Fons (PBKDF2)
+│   │   └── auth/
+│   │       ├── fons_auth.py       # login de El Fons (PBKDF2)
+│   │       └── accounts.py        # cuentas de usuario (registro, login, perfil)
 │   ├── living_memory/             # diario de gestación
 │   ├── analytics/                 # métricas de investigación
 │   └── router/                    # router de módulos
 ├── manifestation/web_interface/   # dashboard y panel del Fons
 ├── data/users/<uuid>/             # datos por usuario (NO se sube a Git)
+├── data/accounts.db               # cuentas (NO se sube a Git)
 ├── scripts/                       # utilidades (contraseña del Fons, etc.)
-├── tests/                         # 434 tests
+├── tests/                         # 707 tests
 └── requirements.txt
 ```
 
@@ -162,8 +165,45 @@ Entra por **`http://127.0.0.1:8080/omnia_dashboard.html`**.
 | `GET` | `/api/memory/echoes` | Ecos de memoria del usuario |
 | `GET` | `/api/modules` | Módulos registrados en el router |
 | `GET` | `/api/ethics/status` | Estado del sistema ético |
-| `POST` | `/api/auth/login` | Login de El Fons |
+| `POST` | `/api/account/register` | Crear cuenta (`email`, `password`, `birth_date`, `display_name` opcional); devuelve el código de recuperación una sola vez |
+| `POST` | `/api/account/login` | Iniciar sesión (`email`, `password`) |
+| `POST` | `/api/account/logout` | Cerrar sesión |
+| `GET` | `/api/account/me` | ¿Hay sesión iniciada? Devuelve el perfil público |
+| `PUT` | `/api/account/profile` | Cambiar el nombre (`display_name`) |
+| `PUT` | `/api/account/password` | Cambiar contraseña (`current_password`, `new_password`) |
+| `POST` | `/api/account/recover` | Restablecer contraseña con el código (`email`, `recovery_code`, `new_password`) |
+| `DELETE` | `/api/account` | Borrar la cuenta y todos sus datos (`password`) |
+| `POST` | `/api/auth/login` | Login de El Fons (independiente de las cuentas) |
 | `*` | `/api/ethics/...` | Consultas y decisiones del Fons (requiere login) |
+
+---
+
+## 👤 Cuentas de usuario
+
+Sin cuenta, Omnia te reconoce por una cookie anónima. Con cuenta, tu consciencia
+y tu memoria te acompañan entre navegadores y dispositivos.
+
+- **Registro**: email, contraseña (mínimo 10 caracteres), fecha de nacimiento y,
+  opcionalmente, tu nombre. El uuid anónimo actual pasa a ser tu cuenta: lo que
+  Omnia ya vivió contigo **se conserva**.
+- **Edad**: se necesitan 13 años o más. La fecha de nacimiento no se muestra, no
+  se puede cambiar y solo se usa para fijar el rango de edad (`minor` 13–14,
+  `minor_basic` 15–17, `adult` 18+) que el resto del ecosistema podrá consultar.
+- **Contraseñas**: PBKDF2-HMAC-SHA256 con 600 000 iteraciones y sal propia. Cinco
+  fallos seguidos bloquean el acceso 15 minutos; las respuestas no revelan si un
+  email existe.
+- **Código de recuperación**: se muestra **una sola vez** al registrarse (aún no
+  hay servicio de email). Quien lo pierda y olvide su contraseña no puede
+  recuperar la cuenta. Cada recuperación entrega un código nuevo.
+- **Cambio de contraseña o recuperación** cierran la sesión en todos los demás
+  dispositivos.
+- **Nombre**: el del perfil se envía a Ollama y tiene prioridad sobre el que se
+  diga en el chat.
+- **Borrar la cuenta** elimina la cuenta y toda su carpeta de datos.
+- Las cuentas viven en `data/accounts.db` y **no dan acceso al panel del Fons**,
+  que sigue teniendo su propio login.
+- Al iniciar sesión, la conversación anónima anterior de ese navegador no se
+  fusiona con la cuenta: cada cuenta trae su propia memoria.
 
 ---
 
@@ -199,8 +239,11 @@ El dashboard muestra el nivel actual y la meta de la fase en curso.
   `data/users/<uuid>/` con su memoria, ecos, diario y estado. **Nada se comparte
   entre usuarios.**
 - Si el usuario dice su nombre ("me llamo…"), se recuerda en su carpeta.
-- Las carpetas de usuarios que nunca crecieron ni dijeron su nombre se borran
-  solas tras `PRUNE_EMPTY_USERS_DAYS` días.
+- Las cuentas guardan email, hash de la contraseña, rango de edad y fecha de
+  nacimiento en `data/accounts.db`; la fecha nunca sale por la API.
+- Las carpetas de usuarios anónimos que nunca crecieron ni dijeron su nombre se
+  borran solas tras `PRUNE_EMPTY_USERS_DAYS` días. Las cuentas nunca se borran
+  así.
 - La ética (SILENS) corre antes que todo lo demás; los temas sensibles se
   consultan a El Fons.
 - El reconocimiento de voz del dashboard lo procesa el navegador y, según cuál
@@ -215,7 +258,7 @@ El dashboard muestra el nivel actual y la meta de la fase en curso.
 python -m pytest tests\ -v
 ```
 
-Resultado esperado: **434 passed**. Los tests no usan red ni Ollama real (se
+Resultado esperado: **707 passed**. Los tests no usan red ni Ollama real (se
 reemplaza por un cliente simulado) ni escriben en tus datos. Si SpaCy y su modelo
 están instalados, 3 tests adicionales usan el modelo real; si no, se omiten.
 
@@ -230,6 +273,8 @@ están instalados, 3 tests adicionales usan el modelo real; si no, se omiten.
 | El dashboard dice "API desconectada" | La API no está corriendo o el puerto no es el 8000 |
 | Respuestas genéricas sin Ollama | Ollama apagado o modelo no descargado: `ollama pull llama3.2` |
 | El panel del Fons no deja entrar | Falta `python scripts\set_fons_password.py` |
+| Olvidé mi contraseña y perdí el código de recuperación | No hay forma automática de recuperar la cuenta (aún no hay email). Se puede crear otra con otro email |
+| El botón dice ENTRAR pero ya creé cuenta | Se cerró la sesión (cambio de contraseña en otro dispositivo, cookie borrada o `APP_SECRET_KEY` distinta): vuelve a entrar |
 | Los tests fallan solo en tu PC | Revisa que `OMNIA_DEV_CONSCIOUSNESS` no esté activo (los tests ya lo aíslan) |
 
 ---

@@ -7,7 +7,18 @@
 * DEPENDENCIAS: flask, flask-cors, requests (ver requirements.txt);
 *            core.auth.fons_auth (stdlib only)
 * CREADO: 2026-06-14
-* ÚLTIMA MODIFICACIÓN: 2026-10-10
+* ÚLTIMA MODIFICACIÓN: 2026-10-11
+*
+* CAMBIO 2026-10-11 -- CUENTAS REALES (registro, login, perfil):
+*   Nuevo core/auth/accounts.py (SQLite data/accounts.db, PBKDF2, código de
+*   recuperación). Endpoints /api/account/* (register, login, logout, me,
+*   profile, password, recover) y DELETE /api/account. La cuenta REUTILIZA
+*   el uuid anónimo de la sesión: la consciencia y la memoria ya ganadas se
+*   conservan. Es independiente del login del Fons: ninguna cuenta de
+*   usuario da acceso al panel del Fons. El nombre del perfil se envía a
+*   Ollama. Las cuentas nunca se purgan como "usuarios vacíos".
+*   Además: los preflight CORS (OPTIONS) ya no cuentan para el límite de
+*   30 peticiones/min (agotarlo daba un "Failed to fetch" opaco).
 *
 * CAMBIO 2026-10-10 -- CORS ROBUSTO EN LOOPBACK: _expand_loopback_origins()
 *   agrega automáticamente la variante localhost <-> 127.0.0.1 de cada
@@ -177,6 +188,11 @@ from core.llm.ollama_client import OllamaClient, OllamaUnavailableError
 from core.mind.spacy_intent import SpaCyIntentClassifier
 from dotenv import load_dotenv
 from core.auth.fons_auth import verify_password, verify_session_token, create_session_token
+from core.auth.accounts import (
+    AccountStore, AccountError, InvalidEmail, WeakPassword, EmailTaken,
+    IdentityInUse, InvalidBirthDate, UnderageError, InvalidDisplayName,
+    InvalidCredentials, AccountNotFound,
+)
 from living_memory.gestation_diary import GestationDiary
 from analytics.research_analytics import ResearchAnalytics
 from router.integration import route_or_none, get_registered_modules
@@ -194,6 +210,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 # que siempre.
 DATA_ROOT = Path(os.environ.get("OMNIA_DATA_DIR", PROJECT_ROOT / "data"))
 USERS_DIR = DATA_ROOT / "users"
+ACCOUNTS_DB = DATA_ROOT / "accounts.db"
 USERS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ==================== FLASK APP ====================
@@ -318,6 +335,34 @@ def check_rate_limit(client_ip: str, max_req: int = 30, window: int = 60) -> boo
     return True
 
 
+# ==================== LÍMITES DE CUENTAS (por IP y acción) ====================
+# Además del límite general de 30/min. Frenan fuerza bruta de contraseñas y
+# códigos de recuperación, y el alta masiva de cuentas.
+ACCOUNT_RATE_LIMITS = {
+    "register": (10, 3600),
+    "login": (10, 60),
+    "recover": (5, 600),
+    "password": (10, 600),
+    "delete": (5, 3600),
+}
+_ACCOUNT_RATE_HORIZON = 3600.0
+_account_rate: Dict[str, list] = {}
+
+
+def _account_rate_ok(bucket: str) -> bool:
+    """True si esta IP aún puede hacer la acción `bucket`; registra el intento."""
+    max_req, window = ACCOUNT_RATE_LIMITS[bucket]
+    key = f"{bucket}:{request.remote_addr or '127.0.0.1'}"
+    now = time.time()
+    recent = [t for t in _account_rate.get(key, []) if now - t < window]
+    if len(recent) >= max_req:
+        _account_rate[key] = recent
+        return False
+    recent.append(now)
+    _account_rate[key] = recent
+    return True
+
+
 # ==================== LÍMITES DE SESIONES Y USUARIOS ====================
 class TooManyNewUsers(Exception):
     """Demasiados usuarios nuevos desde una misma IP en la última hora."""
@@ -375,6 +420,9 @@ def _prune_rate_tables() -> None:
     for ip in list(_new_user_log):
         if not any(now - t < _NEW_USER_WINDOW for t in _new_user_log.get(ip, [])):
             _new_user_log.pop(ip, None)
+    for key in list(_account_rate):
+        if not any(now - t < _ACCOUNT_RATE_HORIZON for t in _account_rate.get(key, [])):
+            _account_rate.pop(key, None)
 
 
 # ==================== SESIÓN POR USUARIO ====================
@@ -390,6 +438,7 @@ _shared: Dict[str, Any] = {
     "ollama": None,
     "spacy": None,
     "research": None,
+    "accounts": None,
     "initialized": False,
     "start_time": time.time(),
 }
@@ -405,10 +454,38 @@ def get_user_id() -> str:
     posteriores desde el mismo navegador reutilizan el mismo user_id,
     dando continuidad de memoria/consciencia sin pedir credenciales.
     """
+    # Si la cookie dice "con cuenta" pero la cuenta ya no existe o su
+    # contraseña cambió (session_version distinta), la sesión queda anónima.
+    if "account_id" in session and not _account_session_valid():
+        session.clear()
     if "user_id" not in session:
         session.permanent = True
         session["user_id"] = str(uuid.uuid4())
     return session["user_id"]
+
+
+def _account_session_valid() -> bool:
+    """¿La cuenta de la cookie sigue existiendo con la misma versión?
+    Sin almacén de cuentas disponible no se puede comprobar: se respeta la
+    cookie (está firmada) en vez de cerrar la sesión de todos."""
+    store = _shared.get("accounts")
+    if store is None:
+        return True
+    aid = session.get("account_id")
+    version = store.get_session_version(aid) if isinstance(aid, str) else None
+    return version is not None and version == session.get("session_version")
+
+
+def _current_account_id() -> Optional[str]:
+    """uuid de la cuenta con sesión iniciada, o None. No crea sesiones."""
+    if "account_id" not in session or not _account_session_valid():
+        return None
+    return session["account_id"]
+
+
+def _effective_name(sess: Dict[str, Any]) -> Optional[str]:
+    """Nombre que se envía a Ollama: el del perfil manda sobre el dicho en chat."""
+    return sess.get("profile_name") or sess.get("user_name")
 
 
 def _user_data_dir(user_id: str) -> Path:
@@ -512,6 +589,19 @@ def _load_user_name(user_id: str) -> Optional[str]:
     return None
 
 
+def _load_profile_name(user_id: str) -> Optional[str]:
+    """Nombre del perfil de la cuenta, o None (sin cuenta o sin nombre)."""
+    store = _shared.get("accounts")
+    if store is None:
+        return None
+    try:
+        profile = store.get_profile(user_id)
+    except Exception as e:
+        logger.warning(f"[{user_id[:8]}] No se pudo leer el perfil: {e}")
+        return None
+    return profile.get("display_name") if profile else None
+
+
 def _create_user_session(user_id: str) -> Dict[str, Any]:
     """Construye el estado consciente completo de un usuario (nuevo o
     recuperado desde disco si ya existía)."""
@@ -534,6 +624,8 @@ def _create_user_session(user_id: str) -> Dict[str, Any]:
         "conversation_history": [],
         # Nombre que la persona dijo de sí misma ("me llamo X"); no es login.
         "user_name": _load_user_name(user_id),
+        # Nombre del perfil de la cuenta (si la hay); tiene prioridad.
+        "profile_name": _load_profile_name(user_id),
         "created_at": time.time(),
         "last_active": time.time(),
     }
@@ -610,6 +702,7 @@ def prune_empty_users(max_age_days: Optional[float] = None) -> int:
     with _sessions_lock:
         active = set(_user_sessions)
 
+    store = _shared.get("accounts")
     removed = 0
     try:
         entries = list(USERS_DIR.iterdir())
@@ -619,6 +712,8 @@ def prune_empty_users(max_age_days: Optional[float] = None) -> int:
         try:
             if not d.is_dir() or d.is_symlink() or not _UUID_RE.match(d.name) or d.name in active:
                 continue
+            if store is not None and store.exists(d.name):
+                continue  # una cuenta nunca es un "usuario vacío"
             last_activity = max(
                 [d.stat().st_mtime] + [p.stat().st_mtime for p in d.rglob("*")]
             )
@@ -700,6 +795,11 @@ def save_all_sessions() -> None:
     with _sessions_lock:
         items = list(_user_sessions.items())
     for user_id, sess in items:
+        # Entre la foto de la lista y este guardado la sesión pudo retirarse
+        # (cierre de sesión o borrado de cuenta): guardarla recrearía su carpeta.
+        with _sessions_lock:
+            if _user_sessions.get(user_id) is not sess:
+                continue
         save_user_state(user_id, sess)
 
 
@@ -755,6 +855,13 @@ def initialize_shared() -> None:
     logger.info("Inicializando componentes compartidos...")
 
     _shared["ethics"] = OmniaEthics()
+
+    try:
+        _shared["accounts"] = AccountStore(ACCOUNTS_DB)
+        logger.info(f"✅ Cuentas de usuario listas ({ACCOUNTS_DB.name})")
+    except Exception as e:
+        _shared["accounts"] = None
+        logger.error(f"❌ No se pudo abrir la base de cuentas: {e}. Registro/login desactivados.")
 
     ollama_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
     _shared["ollama"] = OllamaClient(base_url=ollama_url)
@@ -822,6 +929,11 @@ def _start_autosave_thread() -> None:
 def before_request():
     if request.path in ["/", "/health", "/favicon.ico"]:
         return None
+    # Los preflight de CORS (OPTIONS) no llevan datos ni hacen nada: no cuentan.
+    # Si contaran, agotarían el límite y el navegador vería un error de red
+    # opaco ("Failed to fetch") en vez de un 429 legible.
+    if request.method == "OPTIONS":
+        return None
     client_ip = request.remote_addr or "127.0.0.1"
     if not check_rate_limit(client_ip):
         return jsonify({
@@ -844,6 +956,39 @@ def _handle_session_capacity(_exc):
         "error": "Server busy",
         "message": "El servidor está al límite de sesiones activas. Inténtalo en unos minutos.",
     }), 503
+
+
+class AccountsUnavailable(Exception):
+    """La base de cuentas no se pudo abrir al arrancar."""
+
+
+@app.errorhandler(AccountsUnavailable)
+def _handle_accounts_unavailable(_exc):
+    return jsonify({
+        "error": "accounts_unavailable",
+        "message": "El sistema de cuentas no está disponible ahora mismo.",
+    }), 503
+
+
+_ACCOUNT_STATUS = {
+    InvalidEmail: 400, WeakPassword: 400, InvalidBirthDate: 400,
+    InvalidDisplayName: 400, UnderageError: 403, EmailTaken: 409,
+    IdentityInUse: 409, InvalidCredentials: 401, AccountNotFound: 404,
+}
+
+
+@app.errorhandler(AccountError)
+def _handle_account_error(exc):
+    status = _ACCOUNT_STATUS.get(type(exc), 400)
+    if isinstance(exc, InvalidCredentials):
+        # Mensaje fijo: no revela si el email existe, si está bloqueado, etc.
+        if request.path.endswith("/recover"):
+            message = "Email o código de recuperación incorrectos, o demasiados intentos. Espera unos minutos."
+        else:
+            message = "Email o contraseña incorrectos, o demasiados intentos. Espera unos minutos."
+    else:
+        message = str(exc) or exc.code
+    return jsonify({"error": exc.code, "message": message}), status
 
 
 # ==================== ENDPOINTS ====================
@@ -911,6 +1056,212 @@ def get_modules():
     return jsonify({
         "modules": get_registered_modules(),
     })
+
+# ==================== CUENTAS DE USUARIO ====================
+# Independientes del login del Fons. Solo JSON (CORS + SameSite=Lax cubren
+# el CSRF: un formulario de otro sitio no puede enviar application/json).
+
+def _accounts() -> AccountStore:
+    store = _shared.get("accounts")
+    if store is None:
+        raise AccountsUnavailable()
+    return store
+
+
+def _json_body() -> Dict[str, Any]:
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise InvalidEmail("Se esperaba un cuerpo JSON")
+    return data
+
+
+def _rate_limited(bucket: str):
+    if _account_rate_ok(bucket):
+        return None
+    return jsonify({
+        "error": "rate_limited",
+        "message": "Demasiados intentos. Espera unos minutos e inténtalo de nuevo.",
+    }), 429
+
+
+def _login_required():
+    """(account_id, None) o (None, respuesta 401)."""
+    aid = _current_account_id()
+    if aid is None:
+        return None, (jsonify({
+            "error": "login_required",
+            "message": "Inicia sesión para hacer esto.",
+        }), 401)
+    return aid, None
+
+
+def _start_account_session(account_id: str, version: int) -> None:
+    session.permanent = True
+    session["user_id"] = account_id
+    session["account_id"] = account_id
+    session["session_version"] = version
+
+
+@app.post("/api/account/register")
+def account_register():
+    """Crea la cuenta con el uuid anónimo actual (conserva su consciencia).
+    Devuelve el código de recuperación UNA sola vez."""
+    store = _accounts()
+    limited = _rate_limited("register")
+    if limited:
+        return limited
+    if _current_account_id() is not None:
+        return jsonify({
+            "error": "already_logged_in",
+            "message": "Ya tienes la sesión iniciada. Cierra sesión para crear otra cuenta.",
+        }), 409
+    data = _json_body()
+    user_id = get_user_id()
+    # Si el uuid de esta cookie ya tiene cuenta (la sesión se limpió a medias),
+    # store.register lanza IdentityInUse; no se reutiliza ni se pisa.
+    profile, code = store.register(
+        user_id,
+        data.get("email"),
+        data.get("password"),
+        data.get("birth_date"),
+        data.get("display_name"),
+    )
+    version = store.get_session_version(user_id)
+    _start_account_session(user_id, version)
+    with _sessions_lock:
+        live = _user_sessions.get(user_id)
+        if live is not None:
+            live["profile_name"] = profile.get("display_name")
+    return jsonify({
+        "profile": profile,
+        "recovery_code": code,
+        "message": "Cuenta creada. Guarda el código de recuperación: no se volverá a mostrar.",
+    }), 201
+
+
+@app.post("/api/account/login")
+def account_login():
+    store = _accounts()
+    limited = _rate_limited("login")
+    if limited:
+        return limited
+    data = _json_body()
+    profile, version = store.authenticate(data.get("email"), data.get("password"))
+    # La sesión anónima previa se descarta (sin fusionar): la cuenta trae
+    # su propia consciencia y memoria.
+    session.clear()
+    _start_account_session(profile["user_id"], version)
+    return jsonify({"profile": profile})
+
+
+@app.post("/api/account/logout")
+def account_logout():
+    """Guarda y cierra la sesión en memoria de la cuenta y limpia la cookie.
+    Idempotente: sin sesión también responde 200."""
+    aid = _current_account_id()
+    if aid is not None:
+        with _sessions_lock:
+            sess = _user_sessions.pop(aid, None)
+        if sess is not None:
+            _close_session(aid, sess)
+    session.clear()
+    return jsonify({"logged_in": False})
+
+
+@app.get("/api/account/me")
+def account_me():
+    """Estado de login. No crea sesiones anónimas ni carpetas."""
+    aid = _current_account_id()
+    if aid is None:
+        if "account_id" in session:
+            session.clear()
+        return jsonify({"logged_in": False, "profile": None})
+    profile = _accounts().get_profile(aid)
+    if profile is None:
+        session.clear()
+        return jsonify({"logged_in": False, "profile": None})
+    return jsonify({"logged_in": True, "profile": profile})
+
+
+@app.put("/api/account/profile")
+def account_update_profile():
+    aid, err = _login_required()
+    if err:
+        return err
+    data = _json_body()
+    profile = _accounts().update_profile(aid, data.get("display_name"))
+    with _sessions_lock:
+        live = _user_sessions.get(aid)
+        if live is not None:
+            live["profile_name"] = profile.get("display_name")
+    return jsonify({"profile": profile})
+
+
+@app.put("/api/account/password")
+def account_change_password():
+    aid, err = _login_required()
+    if err:
+        return err
+    limited = _rate_limited("password")
+    if limited:
+        return limited
+    data = _json_body()
+    version = _accounts().change_password(
+        aid, data.get("current_password"), data.get("new_password")
+    )
+    # Las demás sesiones de esta cuenta quedan invalidadas; esta sigue viva.
+    session["session_version"] = version
+    return jsonify({"changed": True, "message": "Contraseña actualizada. Se cerró la sesión en los demás dispositivos."})
+
+
+@app.post("/api/account/recover")
+def account_recover():
+    """Restablece la contraseña con el código de recuperación. No inicia
+    sesión; entrega un código NUEVO (el anterior deja de servir)."""
+    store = _accounts()
+    limited = _rate_limited("recover")
+    if limited:
+        return limited
+    data = _json_body()
+    profile, new_code, _version = store.recover(
+        data.get("email"), data.get("recovery_code"), data.get("new_password")
+    )
+    return jsonify({
+        "recovered": True,
+        "recovery_code": new_code,
+        "message": "Contraseña restablecida. Guarda tu nuevo código de recuperación y vuelve a iniciar sesión.",
+    })
+
+
+@app.delete("/api/account")
+def account_delete():
+    """Borra la cuenta y TODOS sus datos (derecho de supresión). Exige la contraseña."""
+    aid, err = _login_required()
+    if err:
+        return err
+    limited = _rate_limited("delete")
+    if limited:
+        return limited
+    data = _json_body()
+    _accounts().delete_account(aid, data.get("password"))
+    # Se descarta la sesión en memoria SIN guardarla (no se re-crea la carpeta).
+    with _sessions_lock:
+        sess = _user_sessions.pop(aid, None)
+    if sess is not None:
+        for key in ("memory", "diary"):
+            close = getattr(sess.get(key), "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as e:
+                    logger.warning(f"[{aid[:8]}] Error cerrando {key}: {e}")
+    user_dir = USERS_DIR / aid
+    if _UUID_RE.match(aid) and user_dir.is_dir() and not user_dir.is_symlink():
+        shutil.rmtree(user_dir, ignore_errors=True)
+    session.clear()
+    logger.info(f"[{aid[:8]}] Cuenta y datos eliminados")
+    return jsonify({"deleted": True})
+
 
 # ==================== AUTENTICACIÓN DEL FONS ====================
 
@@ -1239,7 +1590,7 @@ def chat_endpoint():
     if response is None:
         try:
             response = _shared["ollama"].generate(
-                user_stated_name=sess.get("user_name"),
+                user_stated_name=_effective_name(sess),
                 user_message=user_message,
                 consciousness_level=sess["identity"].consciousness_level,
                 phase=_get_phase(sess["identity"].consciousness_level),
@@ -1451,6 +1802,7 @@ if __name__ == "__main__":
 
     import atexit
     atexit.register(save_all_sessions)
+    atexit.register(lambda: _shared["accounts"] and _shared["accounts"].close())
 
     port = int(os.environ.get("PORT", 8000))
 

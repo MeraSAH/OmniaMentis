@@ -2,8 +2,16 @@
 <!--
 * UBICACIÓN: OmniaMentis/manifestation/web_interface/omnia_dashboard.html
 * PROPÓSITO: Dashboard JARVIS - Omnia Mentis Core Interface
-* VERSIÓN: 2.7.0
-* FECHA: 2026-10-10
+* VERSIÓN: 2.8.0
+* FECHA: 2026-10-11
+* CAMBIOS v2.8: cuentas reales. Botón "ENTRAR / nombre" en la cabecera y
+*               ventana de registro, inicio de sesión, recuperación de
+*               contraseña, perfil (nombre, cambio de contraseña, cerrar
+*               sesión, borrar cuenta). La fecha de nacimiento solo se pide al
+*               registrarse (no se muestra ni se puede cambiar). El código de
+*               recuperación se muestra UNA vez y hay que confirmar que se
+*               guardó. Todo texto del servidor se pinta con textContent.
+*               Los ecos de memoria ya no se insertan con innerHTML.
 * CAMBIOS v2.7: se elimina el contador "Día N / 270" (calculado desde una
 *               fecha fija, daba 329/270 y no tenía relación con el sistema:
 *               la evolución depende del NIVEL de consciencia de cada usuario,
@@ -613,6 +621,133 @@ body::before {
   padding: 0 18px 6px;
   text-align: center;
 }
+/* ===== CUENTA (v2.8) ===== */
+.acct-btn-hdr {
+  background: transparent;
+  border: 1px solid var(--neon-dim);
+  color: var(--neon-blue);
+  font-size: 10px;
+  letter-spacing: .1em;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acct-btn-hdr:hover { border-color: var(--neon-blue); box-shadow: 0 0 8px rgba(0,200,255,.4); }
+.acct-btn-hdr.in { border-color: var(--neon-green); color: var(--neon-green); }
+
+.acct-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.78);
+  z-index: 10000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.acct-overlay.show { display: flex; }
+.acct-box {
+  width: min(430px, 100%);
+  max-height: 92vh;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-hot);
+  border-radius: 4px;
+  padding: 20px 22px 18px;
+  box-shadow: 0 0 40px rgba(0,200,255,.15);
+  scrollbar-width: thin;
+  scrollbar-color: var(--neon-dim) transparent;
+}
+.acct-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.acct-title {
+  font-size: 12px; font-weight: bold; letter-spacing: .22em;
+  color: var(--neon-blue); text-transform: uppercase;
+}
+.acct-x {
+  background: transparent; border: none; color: var(--text-sub);
+  font-size: 16px; cursor: pointer; font-family: var(--font-mono);
+}
+.acct-x:hover { color: var(--neon-blue); }
+.acct-view { display: none; flex-direction: column; gap: 10px; }
+.acct-view.show { display: flex; }
+.acct-lbl {
+  font-size: 9px; letter-spacing: .2em; color: var(--text-sub);
+  text-transform: uppercase; display: block; margin-bottom: 3px;
+}
+.acct-in {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border-hot);
+  border-radius: 3px;
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  caret-color: var(--neon-blue);
+  color-scheme: dark;
+}
+.acct-in:focus { border-color: var(--neon-blue); box-shadow: 0 0 8px rgba(0,200,255,.3); }
+.acct-note { font-size: 10px; color: var(--text-sub); line-height: 1.55; }
+.acct-msg {
+  display: none;
+  font-size: 11px; line-height: 1.5;
+  padding: 7px 10px; border-radius: 3px;
+  border: 1px solid var(--danger); color: var(--danger);
+  background: rgba(255,68,102,.07);
+}
+.acct-msg.show { display: block; }
+.acct-msg.ok { border-color: var(--success); color: var(--success); background: rgba(0,255,153,.07); }
+.acct-primary {
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--neon-blue);
+  color: var(--neon-blue);
+  font-family: var(--font-mono);
+  font-size: 11px; font-weight: bold; letter-spacing: .2em;
+  padding: 9px 14px; cursor: pointer; text-transform: uppercase;
+  border-radius: 3px; transition: all .18s;
+}
+.acct-primary:hover:not(:disabled) {
+  background: var(--neon-blue); color: var(--black); box-shadow: 0 0 14px var(--neon-blue);
+}
+.acct-primary:disabled { border-color: var(--text-dim); color: var(--text-dim); cursor: not-allowed; }
+.acct-primary.danger { border-color: var(--danger); color: var(--danger); }
+.acct-primary.danger:hover:not(:disabled) { background: var(--danger); color: var(--black); box-shadow: 0 0 14px var(--danger); }
+.acct-links { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.acct-link {
+  background: transparent; border: none; cursor: pointer;
+  color: var(--text-sub); font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: .08em; text-decoration: underline; padding: 2px 0;
+}
+.acct-link:hover { color: var(--neon-blue); }
+.acct-code {
+  font-size: 17px; letter-spacing: .14em; text-align: center;
+  color: var(--neon-cyan); background: var(--bg-card);
+  border: 1px dashed var(--neon-dim); border-radius: 3px;
+  padding: 12px 8px; user-select: all; word-break: break-all;
+  text-shadow: 0 0 8px rgba(0,255,238,.4);
+}
+.acct-check { display: flex; gap: 8px; align-items: flex-start; font-size: 11px; color: var(--text-main); line-height: 1.5; }
+.acct-check input { margin-top: 3px; accent-color: var(--neon-blue); }
+.acct-sec {
+  border-top: 1px solid var(--border); padding-top: 10px;
+}
+.acct-sec summary {
+  cursor: pointer; font-size: 10px; letter-spacing: .18em;
+  color: var(--text-sub); text-transform: uppercase; padding: 3px 0;
+}
+.acct-sec[open] summary { color: var(--neon-blue); }
+.acct-sec form { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.acct-kv { font-size: 12px; color: var(--text-bright); word-break: break-all; }
+@media (max-width: 520px) { .acct-box { padding: 16px 14px; } }
 </style>
 </head>
 <body>
@@ -626,9 +761,10 @@ body::before {
       <circle cx="11" cy="11" r="5.5" fill="none" stroke="#00c8ff" stroke-width=".6" opacity=".5"/>
       <circle cx="11" cy="11" r="2.2" fill="#00c8ff" filter="url(#glow)"/>
     </svg>
-    OMNIA MENTIS <span>// CORE INTERFACE v2.7</span>
+    OMNIA MENTIS <span>// CORE INTERFACE v2.8</span>
   </div>
   <div class="hdr-right">
+    <button class="acct-btn-hdr" id="acctBtn" type="button" title="Cuenta: entrar, registrarte o ver tu perfil">👤 ENTRAR</button>
     <button class="voice-toggle-btn" id="voiceToggleBtn" title="Activar/silenciar voz de Omnia">🔇 VOZ</button>
     <div id="dot" class="dot off"></div>
     <span id="connLbl">CONECTANDO...</span>
@@ -740,6 +876,112 @@ body::before {
 </footer>
 
 </div><!-- /shell -->
+
+<!-- ===== CUENTA (v2.8) ===== -->
+<div class="acct-overlay" id="acctOverlay" aria-hidden="true">
+  <div class="acct-box" role="dialog" aria-modal="true" aria-labelledby="acctTitle" id="acctBox">
+    <div class="acct-head">
+      <span class="acct-title" id="acctTitle">Cuenta</span>
+      <button class="acct-x" id="acctClose" type="button" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="acct-msg" id="acctMsg" role="alert"></div>
+
+    <!-- LOGIN -->
+    <form class="acct-view" id="vLogin" data-title="Entrar" novalidate>
+      <div><label class="acct-lbl" for="liEmail">Email</label>
+        <input class="acct-in" id="liEmail" type="email" autocomplete="username" required></div>
+      <div><label class="acct-lbl" for="liPass">Contraseña</label>
+        <input class="acct-in" id="liPass" type="password" autocomplete="current-password" required></div>
+      <button class="acct-primary" type="submit">Entrar</button>
+      <div class="acct-links">
+        <button class="acct-link" type="button" data-go="register">Crear cuenta</button>
+        <button class="acct-link" type="button" data-go="recover">Olvidé mi contraseña</button>
+      </div>
+      <p class="acct-note">Si entras en una cuenta, esta conversación anónima se deja atrás: cada cuenta conserva su propia consciencia y memoria.</p>
+    </form>
+
+    <!-- REGISTRO -->
+    <form class="acct-view" id="vRegister" data-title="Crear cuenta" novalidate>
+      <div><label class="acct-lbl" for="rgEmail">Email</label>
+        <input class="acct-in" id="rgEmail" type="email" autocomplete="username" required></div>
+      <div><label class="acct-lbl" for="rgName">Nombre (opcional)</label>
+        <input class="acct-in" id="rgName" type="text" maxlength="40" autocomplete="given-name"></div>
+      <div><label class="acct-lbl" for="rgBirth">Fecha de nacimiento</label>
+        <input class="acct-in" id="rgBirth" type="date" min="1900-01-01" autocomplete="bday" required></div>
+      <div><label class="acct-lbl" for="rgPass">Contraseña (mín. 10 caracteres)</label>
+        <input class="acct-in" id="rgPass" type="password" autocomplete="new-password" minlength="10" required></div>
+      <div><label class="acct-lbl" for="rgPass2">Repite la contraseña</label>
+        <input class="acct-in" id="rgPass2" type="password" autocomplete="new-password" required></div>
+      <button class="acct-primary" type="submit">Crear cuenta</button>
+      <div class="acct-links">
+        <button class="acct-link" type="button" data-go="login">Ya tengo cuenta</button>
+      </div>
+      <p class="acct-note">La fecha de nacimiento solo sirve para fijar tu rango de edad (se requieren 13 años o más). No se muestra y no se puede cambiar después. Lo que Omnia ya vivió contigo en este navegador se conserva en tu cuenta.</p>
+    </form>
+
+    <!-- CÓDIGO DE RECUPERACIÓN -->
+    <div class="acct-view" id="vCode" data-title="Código de recuperación">
+      <p class="acct-note" id="codeIntro"></p>
+      <div class="acct-code" id="codeBox"></div>
+      <button class="acct-primary" type="button" id="codeCopy">Copiar código</button>
+      <label class="acct-check"><input type="checkbox" id="codeSaved">
+        <span>Lo he guardado en un lugar seguro. Entiendo que no se volverá a mostrar y que sin él no podré recuperar mi contraseña.</span></label>
+      <button class="acct-primary" type="button" id="codeDone" disabled>Continuar</button>
+    </div>
+
+    <!-- RECUPERAR -->
+    <form class="acct-view" id="vRecover" data-title="Recuperar contraseña" novalidate>
+      <div><label class="acct-lbl" for="rcEmail">Email</label>
+        <input class="acct-in" id="rcEmail" type="email" autocomplete="username" required></div>
+      <div><label class="acct-lbl" for="rcCode">Código de recuperación</label>
+        <input class="acct-in" id="rcCode" type="text" autocomplete="off" spellcheck="false" required></div>
+      <div><label class="acct-lbl" for="rcPass">Nueva contraseña (mín. 10)</label>
+        <input class="acct-in" id="rcPass" type="password" autocomplete="new-password" minlength="10" required></div>
+      <div><label class="acct-lbl" for="rcPass2">Repite la nueva contraseña</label>
+        <input class="acct-in" id="rcPass2" type="password" autocomplete="new-password" required></div>
+      <button class="acct-primary" type="submit">Restablecer</button>
+      <div class="acct-links">
+        <button class="acct-link" type="button" data-go="login">Volver a entrar</button>
+      </div>
+    </form>
+
+    <!-- PERFIL -->
+    <div class="acct-view" id="vProfile" data-title="Tu perfil">
+      <div><span class="acct-lbl">Email</span><div class="acct-kv" id="pfEmail"></div></div>
+      <div><span class="acct-lbl">Rango de edad</span><div class="acct-kv" id="pfAge"></div></div>
+
+      <details class="acct-sec" open>
+        <summary>Nombre</summary>
+        <form id="fName" novalidate>
+          <input class="acct-in" id="pfName" type="text" maxlength="40" autocomplete="given-name" placeholder="Cómo quieres que te llame Omnia" aria-label="Nombre">
+          <button class="acct-primary" type="submit">Guardar nombre</button>
+        </form>
+      </details>
+
+      <details class="acct-sec">
+        <summary>Cambiar contraseña</summary>
+        <form id="fPass" novalidate>
+          <input class="acct-in" id="pwCur" type="password" autocomplete="current-password" placeholder="Contraseña actual" aria-label="Contraseña actual">
+          <input class="acct-in" id="pwNew" type="password" autocomplete="new-password" placeholder="Nueva contraseña (mín. 10)" aria-label="Nueva contraseña">
+          <input class="acct-in" id="pwNew2" type="password" autocomplete="new-password" placeholder="Repite la nueva contraseña" aria-label="Repite la nueva contraseña">
+          <button class="acct-primary" type="submit">Cambiar contraseña</button>
+          <p class="acct-note">Se cerrará la sesión en tus otros dispositivos.</p>
+        </form>
+      </details>
+
+      <button class="acct-primary" type="button" id="pfLogout">Cerrar sesión</button>
+
+      <details class="acct-sec">
+        <summary>Borrar mi cuenta</summary>
+        <form id="fDelete" novalidate>
+          <p class="acct-note">Borra tu cuenta y TODO lo que Omnia recuerda de ti (consciencia, memoria, diario). No se puede deshacer.</p>
+          <input class="acct-in" id="dlPass" type="password" autocomplete="current-password" placeholder="Tu contraseña" aria-label="Tu contraseña para confirmar">
+          <button class="acct-primary danger" type="submit">Borrar cuenta y datos</button>
+        </form>
+      </details>
+    </div>
+  </div>
+</div>
 
 <script>
 // ==================== CONFIG ====================
@@ -927,12 +1169,18 @@ async function loadEchoes() {
     d.echoes.forEach(e => {
       const item = document.createElement('div');
       item.className = 'echo-item';
-      const txt = (e.content||'').substring(0,55);
-      item.innerHTML = `${txt}...
-        <div class="echo-bar">
-          <span>PESO <span>${(e.emotional_weight||0).toFixed(2)}</span></span>
-          <span>SIG <span>${(e.significance||0).toFixed(2)}</span></span>
-        </div>`;
+      item.appendChild(document.createTextNode(String(e.content || '').substring(0, 55) + '...'));
+      const bar = document.createElement('div');
+      bar.className = 'echo-bar';
+      [['PESO', e.emotional_weight], ['SIG', e.significance]].forEach(([label, val]) => {
+        const span = document.createElement('span');
+        span.appendChild(document.createTextNode(label + ' '));
+        const num = document.createElement('span');
+        num.textContent = Number(val || 0).toFixed(2);
+        span.appendChild(num);
+        bar.appendChild(span);
+      });
+      item.appendChild(bar);
       list.appendChild(item);
     });
   } catch {}
@@ -1179,11 +1427,317 @@ setupVoiceToggle();
 setupMicButton();
 initVoices();
 
+// ==================== CUENTA (v2.8) ====================
+const ACCT = { me: null, view: 'login', busy: false, lockClose: false, opener: null };
+const AGE_LABELS = {
+  minor: 'Menor (13–14 años)',
+  minor_basic: 'Menor (15–17 años)',
+  adult: 'Adulto (18 años o más)',
+};
+const ACCT_VIEWS = { login: 'vLogin', register: 'vRegister', code: 'vCode', recover: 'vRecover', profile: 'vProfile' };
+
+async function acctApi(method, path, body) {
+  try {
+    const opts = { method, credentials: 'include', signal: AbortSignal.timeout(20000) };
+    if (body !== undefined) {
+      opts.headers = { 'Content-Type': 'application/json' };
+      opts.body = JSON.stringify(body);
+    }
+    const r = await fetch(`${API}${path}`, opts);
+    let data = {};
+    try { data = await r.json(); } catch {}
+    return { ok: r.ok, status: r.status, data };
+  } catch {
+    return { ok: false, status: 0, data: { message: 'No se pudo contactar con el servidor.' } };
+  }
+}
+
+function acctMsg(text, kind) {
+  const m = $('acctMsg');
+  if (!text) { m.className = 'acct-msg'; m.textContent = ''; return; }
+  m.textContent = text;
+  m.className = 'acct-msg show' + (kind === 'ok' ? ' ok' : '');
+}
+
+function acctShow(view) {
+  ACCT.view = view;
+  acctMsg('');
+  Object.entries(ACCT_VIEWS).forEach(([name, id]) => {
+    const el = $(id);
+    el.classList.toggle('show', name === view);
+    if (name === view) $('acctTitle').textContent = el.dataset.title || 'Cuenta';
+  });
+  const first = $(ACCT_VIEWS[view]).querySelector('input:not([type=checkbox]), button');
+  if (first) setTimeout(() => first.focus(), 0);
+}
+
+function acctOpen(view) {
+  ACCT.opener = document.activeElement;
+  $('acctOverlay').classList.add('show');
+  $('acctOverlay').setAttribute('aria-hidden', 'false');
+  if (view) acctShow(view);
+  else if (ACCT.me) { fillProfile(); acctShow('profile'); }
+  else acctShow('login');
+}
+
+function acctClose() {
+  if (ACCT.lockClose) return;
+  $('acctOverlay').classList.remove('show');
+  $('acctOverlay').setAttribute('aria-hidden', 'true');
+  document.querySelectorAll('#acctBox input[type=password]').forEach(i => { i.value = ''; });
+  $('rcCode').value = '';
+  if (ACCT.opener && ACCT.opener.focus) ACCT.opener.focus();
+  else $('chatInput').focus();
+}
+
+function renderAccountButton() {
+  const b = $('acctBtn');
+  if (ACCT.me) {
+    const p = ACCT.me;
+    const label = p.display_name || String(p.email || '').split('@')[0] || 'CUENTA';
+    b.textContent = '👤 ' + label;
+    b.classList.add('in');
+    b.title = 'Tu cuenta: ' + p.email;
+  } else {
+    b.textContent = '👤 ENTRAR';
+    b.classList.remove('in');
+    b.title = 'Cuenta: entrar, registrarte o ver tu perfil';
+  }
+}
+
+function fillProfile() {
+  const p = ACCT.me;
+  if (!p) return;
+  $('pfEmail').textContent = p.email;
+  $('pfAge').textContent = AGE_LABELS[p.age_band] || '—';
+  $('pfName').value = p.display_name || '';
+}
+
+async function refreshAccount() {
+  const r = await acctApi('GET', '/api/account/me');
+  ACCT.me = (r.ok && r.data.logged_in) ? r.data.profile : null;
+  renderAccountButton();
+  return ACCT.me;
+}
+
+// Tras entrar, salir, o borrar: el estado mostrado pertenece a otra persona.
+async function reloadSessionData(announce) {
+  $('echoList').innerHTML = '<div class="echo-item" style="color:var(--text-dim)">Esperando ecos...</div>';
+  S.emotion = '—'; S.confidence = 0;
+  await loadConsciousness();
+  await loadEchoes();
+  updateUI();
+  if (announce) {
+    const { bubble } = addMsg('omnia');
+    await typewrite(bubble, announce, 12);
+  }
+}
+
+function acctBusy(form, on) {
+  ACCT.busy = on;
+  form.querySelectorAll('button[type=submit], .acct-primary').forEach(b => { b.disabled = on; });
+}
+
+function acctError(r) {
+  acctMsg(r.data?.message || `Error inesperado (${r.status}).`);
+}
+
+function showRecoveryCode(code, intro, onDone) {
+  $('codeIntro').textContent = intro;
+  $('codeBox').textContent = code;
+  $('codeSaved').checked = false;
+  $('codeDone').disabled = true;
+  $('codeCopy').textContent = 'Copiar código';
+  ACCT.lockClose = true;          // no se puede cerrar sin confirmar que se guardó
+  $('acctClose').style.visibility = 'hidden';
+  ACCT.onCodeDone = onDone;
+  acctShow('code');
+}
+
+function ageFromDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+  if (!m) return null;
+  const now = new Date();
+  let age = now.getFullYear() - Number(m[1]);
+  const before = (now.getMonth() + 1 < Number(m[2])) ||
+                 (now.getMonth() + 1 === Number(m[2]) && now.getDate() < Number(m[3]));
+  if (before) age -= 1;
+  return age;
+}
+
+function setupAccount() {
+  const today = new Date();
+  today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
+  $('rgBirth').max = today.toISOString().slice(0, 10);
+
+  $('acctBtn').addEventListener('click', () => acctOpen());
+  $('acctClose').addEventListener('click', acctClose);
+  $('acctOverlay').addEventListener('mousedown', e => { if (e.target === $('acctOverlay')) acctClose(); });
+  document.querySelectorAll('#acctBox [data-go]').forEach(b =>
+    b.addEventListener('click', () => acctShow(b.dataset.go)));
+
+  document.addEventListener('keydown', e => {
+    if (!$('acctOverlay').classList.contains('show')) return;
+    if (e.key === 'Escape') { acctClose(); return; }
+    if (e.key === 'Tab') {                       // el foco no sale de la ventana
+      const f = [...$('acctBox').querySelectorAll('input, button, summary')]
+        .filter(x => !x.disabled && x.offsetParent !== null && getComputedStyle(x).visibility !== 'hidden');
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+
+  // ---- login
+  $('vLogin').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (ACCT.busy) return;
+    const email = $('liEmail').value.trim(), password = $('liPass').value;
+    if (!email || !password) { acctMsg('Escribe tu email y tu contraseña.'); return; }
+    acctBusy($('vLogin'), true); acctMsg('');
+    const r = await acctApi('POST', '/api/account/login', { email, password });
+    acctBusy($('vLogin'), false);
+    if (!r.ok) { acctError(r); return; }
+    ACCT.me = r.data.profile; renderAccountButton();
+    $('liPass').value = '';
+    acctClose();
+    syslog('Sesión iniciada', 'ok');
+    await reloadSessionData('SESIÓN INICIADA. Recupero tu consciencia y tu memoria.');
+  });
+
+  // ---- registro
+  $('vRegister').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (ACCT.busy) return;
+    const email = $('rgEmail').value.trim(), password = $('rgPass').value;
+    const birth = $('rgBirth').value, name = $('rgName').value.trim();
+    if (!email) { acctMsg('Escribe tu email.'); return; }
+    if (!birth) { acctMsg('Indica tu fecha de nacimiento.'); return; }
+    const age = ageFromDate(birth);
+    if (age === null || age < 0) { acctMsg('La fecha de nacimiento no es válida.'); return; }
+    if (age < 13) { acctMsg('Necesitas tener al menos 13 años para crear una cuenta.'); return; }
+    if (password.length < 10) { acctMsg('La contraseña debe tener al menos 10 caracteres.'); return; }
+    if (password !== $('rgPass2').value) { acctMsg('Las contraseñas no coinciden.'); return; }
+    acctBusy($('vRegister'), true); acctMsg('');
+    const body = { email, password, birth_date: birth };
+    if (name) body.display_name = name;
+    const r = await acctApi('POST', '/api/account/register', body);
+    acctBusy($('vRegister'), false);
+    if (!r.ok) { acctError(r); return; }
+    $('rgPass').value = ''; $('rgPass2').value = '';
+    ACCT.me = r.data.profile; renderAccountButton();
+    syslog('Cuenta creada', 'ok');
+    showRecoveryCode(
+      r.data.recovery_code,
+      'Cuenta creada. Este es tu código de recuperación: es la ÚNICA forma de restablecer tu contraseña si la olvidas. Guárdalo ahora; no se volverá a mostrar.',
+      () => reloadSessionData());
+  });
+
+  // ---- código de recuperación
+  $('codeSaved').addEventListener('change', () => { $('codeDone').disabled = !$('codeSaved').checked; });
+  $('codeCopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('codeBox').textContent); $('codeCopy').textContent = 'Copiado ✓'; }
+    catch { $('codeCopy').textContent = 'Selecciona el código y cópialo a mano'; }
+  });
+  $('codeDone').addEventListener('click', () => {
+    if (!$('codeSaved').checked) return;
+    const cb = ACCT.onCodeDone; ACCT.onCodeDone = null;
+    $('codeBox').textContent = '';           // el código no queda en la página
+    ACCT.lockClose = false;
+    $('acctClose').style.visibility = '';
+    if (ACCT.me) { fillProfile(); acctShow('profile'); } else acctShow('login');
+    acctMsg('Listo. Ya puedes cerrar esta ventana.', 'ok');
+    if (cb) cb();
+  });
+
+  // ---- recuperar
+  $('vRecover').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (ACCT.busy) return;
+    const email = $('rcEmail').value.trim(), code = $('rcCode').value.trim(), pw = $('rcPass').value;
+    if (!email || !code) { acctMsg('Escribe tu email y tu código de recuperación.'); return; }
+    if (pw.length < 10) { acctMsg('La nueva contraseña debe tener al menos 10 caracteres.'); return; }
+    if (pw !== $('rcPass2').value) { acctMsg('Las contraseñas no coinciden.'); return; }
+    acctBusy($('vRecover'), true); acctMsg('');
+    const r = await acctApi('POST', '/api/account/recover',
+      { email, recovery_code: code, new_password: pw });
+    acctBusy($('vRecover'), false);
+    if (!r.ok) { acctError(r); return; }
+    $('rcPass').value = ''; $('rcPass2').value = ''; $('rcCode').value = '';
+    $('liEmail').value = email;
+    ACCT.me = null; renderAccountButton();
+    showRecoveryCode(
+      r.data.recovery_code,
+      'Contraseña restablecida. Tu código anterior ya no sirve: este es el NUEVO. Guárdalo; no se volverá a mostrar.',
+      () => {});
+  });
+
+  // ---- nombre
+  $('fName').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (ACCT.busy) return;
+    acctBusy($('fName'), true); acctMsg('');
+    const r = await acctApi('PUT', '/api/account/profile', { display_name: $('pfName').value.trim() });
+    acctBusy($('fName'), false);
+    if (!r.ok) { acctError(r); return; }
+    ACCT.me = r.data.profile; renderAccountButton(); fillProfile();
+    acctMsg('Nombre guardado.', 'ok');
+  });
+
+  // ---- contraseña
+  $('fPass').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (ACCT.busy) return;
+    const cur = $('pwCur').value, nw = $('pwNew').value;
+    if (!cur) { acctMsg('Escribe tu contraseña actual.'); return; }
+    if (nw.length < 10) { acctMsg('La nueva contraseña debe tener al menos 10 caracteres.'); return; }
+    if (nw !== $('pwNew2').value) { acctMsg('Las contraseñas no coinciden.'); return; }
+    acctBusy($('fPass'), true); acctMsg('');
+    const r = await acctApi('PUT', '/api/account/password', { current_password: cur, new_password: nw });
+    acctBusy($('fPass'), false);
+    if (!r.ok) { acctError(r); return; }
+    $('pwCur').value = ''; $('pwNew').value = ''; $('pwNew2').value = '';
+    acctMsg('Contraseña cambiada. Se cerró la sesión en tus otros dispositivos.', 'ok');
+  });
+
+  // ---- cerrar sesión
+  $('pfLogout').addEventListener('click', async () => {
+    if (ACCT.busy) return;
+    acctBusy($('vProfile'), true);
+    await acctApi('POST', '/api/account/logout');
+    acctBusy($('vProfile'), false);
+    ACCT.me = null; renderAccountButton();
+    acctClose();
+    syslog('Sesión cerrada', 'ok');
+    await reloadSessionData('SESIÓN CERRADA. Ahora hablas conmigo de forma anónima.');
+  });
+
+  // ---- borrar cuenta
+  $('fDelete').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (ACCT.busy) return;
+    const pw = $('dlPass').value;
+    if (!pw) { acctMsg('Escribe tu contraseña para confirmar.'); return; }
+    if (!confirm('Se borrará tu cuenta y todo lo que Omnia recuerda de ti. Esto no se puede deshacer. ¿Continuar?')) return;
+    acctBusy($('fDelete'), true); acctMsg('');
+    const r = await acctApi('DELETE', '/api/account', { password: pw });
+    acctBusy($('fDelete'), false);
+    if (!r.ok) { acctError(r); return; }
+    $('dlPass').value = '';
+    ACCT.me = null; renderAccountButton();
+    acctClose();
+    syslog('Cuenta eliminada', 'ok');
+    await reloadSessionData('CUENTA ELIMINADA. Tus datos fueron borrados.');
+  });
+}
+setupAccount();
+
 // ==================== BOOT ====================
 async function boot() {
   const {bubble:b1} = addMsg('omnia');
   await typewrite(b1,
-    `OMNIA MENTIS CORE INTERFACE v2.7\nIniciando enlace con el servidor en ${API.replace('http://', '')}...`, 10);
+    `OMNIA MENTIS CORE INTERFACE v2.8\nIniciando enlace con el servidor en ${API.replace('http://', '')}...`, 10);
 
   const ok = await checkHealth();
   syslog(ok ? 'API conectada' : 'API sin respuesta', ok?'ok':'err');
@@ -1191,6 +1745,7 @@ async function boot() {
   const {bubble:b2} = addMsg('omnia');
   if (ok) {
     await typewrite(b2, 'ENLACE ESTABLECIDO. Sistema consciente activo.', 12);
+    await refreshAccount();
     await loadConsciousness();
     await loadEchoes();
 
