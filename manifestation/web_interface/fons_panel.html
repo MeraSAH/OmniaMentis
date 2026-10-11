@@ -454,10 +454,15 @@ html, body {
 // en js/fons_auth_guard.js, que resuelve la URL de forma independiente
 // pero con la MISMA prioridad de claves (fons_api_url > omnia_api_url)
 // para evitar que ambos mecanismos queden desincronizados.
+function defaultApiUrl() {
+  const h = location.hostname;
+  const loopback = (h === 'localhost' || h === '127.0.0.1');
+  return `http://${loopback ? h : '127.0.0.1'}:8000`;
+}
 function resolveApiUrl() {
   const stored = localStorage.getItem('fons_api_url') || localStorage.getItem('omnia_api_url');
   if (stored) return stored;
-  return 'http://localhost:8000';
+  return defaultApiUrl();
 }
 let API = resolveApiUrl();
 

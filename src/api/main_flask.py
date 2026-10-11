@@ -4,10 +4,20 @@
 *            crecimiento de consciencia, router de módulos, Ollama y
 *            autenticación del panel del Fons + entrega asíncrona de
 *            resoluciones al usuario final.
-* DEPENDENCIAS: flask, flask-cors, requests (ver requirements_web.txt);
+* DEPENDENCIAS: flask, flask-cors, requests (ver requirements.txt);
 *            core.auth.fons_auth (stdlib only)
 * CREADO: 2026-06-14
 * ÚLTIMA MODIFICACIÓN: 2026-10-10
+*
+* CAMBIO 2026-10-10 -- CORS ROBUSTO EN LOOPBACK: _expand_loopback_origins()
+*   agrega automáticamente la variante localhost <-> 127.0.0.1 de cada
+*   origen configurado en CORS_ORIGINS. Un .env que solo listaba una de
+*   las dos formas hacía fallar el panel del Fons ("Failed to fetch").
+*
+* CAMBIO 2026-10-10 -- LIMPIEZA: /health ya no muestra el modelo fijo
+*   "dolphin-phi:latest" cuando Ollama no responde; muestra el modelo
+*   realmente configurado (OLLAMA_MODEL). El comentario de dependencias
+*   apunta a requirements.txt (requirements_web.txt se eliminó).
 *
 * CAMBIO 2026-10-10 -- SPACY SOLO COMPLETA, NO CONTRADICE:
 *   SpaCy ya no pisa una emoción detectada por OmniaEmpathy; solo actúa
@@ -143,6 +153,7 @@ import re
 import shutil
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import Optional, Dict, Any
@@ -222,8 +233,40 @@ DEFAULT_CORS_ORIGINS = (
     "http://localhost:3000,http://localhost:8080,"
     "http://127.0.0.1:3000,http://127.0.0.1:8080"
 )
+
+
+def _expand_loopback_origins(origins):
+    """
+    Para cada origen en localhost o 127.0.0.1 agrega la variante
+    equivalente (mismo esquema y puerto). Para el navegador son orígenes
+    distintos, y un CORS_ORIGINS que solo lista uno de los dos hace que
+    el otro falle con "Failed to fetch" sin más pistas (ocurrió con el
+    panel del Fons). Ambas formas apuntan a esta misma máquina, así que
+    permitirlas juntas no amplía la superficie de ataque. Orígenes
+    externos y "*" no se tocan.
+    """
+    expanded = []
+    for origin in origins:
+        if origin not in expanded:
+            expanded.append(origin)
+        try:
+            parts = urlsplit(origin)
+            host, port = parts.hostname, parts.port
+        except ValueError:
+            continue
+        if host not in ("localhost", "127.0.0.1") or not parts.scheme:
+            continue
+        other = "127.0.0.1" if host == "localhost" else "localhost"
+        variant = f"{parts.scheme}://{other}" + (f":{port}" if port else "")
+        if variant not in expanded:
+            expanded.append(variant)
+    return expanded
+
+
 _cors_origins_raw = os.environ.get("CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
-_cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+_cors_origins = _expand_loopback_origins(
+    [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+)
 CORS(app, supports_credentials=True, origins=_cors_origins)
 
 # ==================== AUTENTICACIÓN DEL PANEL DEL FONS ====================
@@ -811,10 +854,12 @@ def health_check():
     multiusuario no tendría sentido; expone cuántas sesiones hay
     activas en memoria en su lugar."""
     ollama_info = {"available": False, "error": "No inicializado"}
+    ollama_model = None
     spacy_available = False
 
     if _shared["initialized"]:
         ollama_info = _shared["ollama"].get_model_info()
+        ollama_model = getattr(_shared["ollama"], "model", None)
         spacy_available = _shared["spacy"].available if _shared["spacy"] else False
 
     with _sessions_lock:
@@ -827,7 +872,7 @@ def health_check():
         "uptime_seconds": time.time() - _shared["start_time"],
         "llm": {
             "engine": "ollama",
-            "model": "dolphin-phi:latest",
+            "model": ollama_model,
             **ollama_info,
         },
         "nlp": {

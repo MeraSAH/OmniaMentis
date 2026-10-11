@@ -811,3 +811,39 @@ class TestSpacyOverridePolicy:
 
     def test_spacy_neutral_never_overrides(self, flask_app):
         assert flask_app._spacy_may_override("neutral", _SpacyResult("neutral", 1.0)) is False
+
+
+# ---------------------------------------------------------------------------
+# CORS: localhost y 127.0.0.1 se permiten juntos
+# ---------------------------------------------------------------------------
+
+class TestLoopbackOrigins:
+    def test_adds_127_variant_for_localhost(self, flask_app):
+        out = flask_app._expand_loopback_origins(["http://localhost:8080"])
+        assert out == ["http://localhost:8080", "http://127.0.0.1:8080"]
+
+    def test_adds_localhost_variant_for_127(self, flask_app):
+        out = flask_app._expand_loopback_origins(["http://127.0.0.1:3000"])
+        assert "http://localhost:3000" in out
+
+    def test_external_origins_untouched(self, flask_app):
+        out = flask_app._expand_loopback_origins(["https://omnia.example.com"])
+        assert out == ["https://omnia.example.com"]
+
+    def test_wildcard_untouched(self, flask_app):
+        assert flask_app._expand_loopback_origins(["*"]) == ["*"]
+
+    def test_no_duplicates_when_both_forms_given(self, flask_app):
+        out = flask_app._expand_loopback_origins(
+            ["http://localhost:8080", "http://127.0.0.1:8080"]
+        )
+        assert out == ["http://localhost:8080", "http://127.0.0.1:8080"]
+
+    def test_port_and_scheme_preserved(self, flask_app):
+        out = flask_app._expand_loopback_origins(["https://localhost:8443", "http://localhost"])
+        assert "https://127.0.0.1:8443" in out
+        assert "http://127.0.0.1" in out
+
+    def test_invalid_origin_does_not_crash(self, flask_app):
+        out = flask_app._expand_loopback_origins(["http://[::1", "no-es-url"])
+        assert "no-es-url" in out

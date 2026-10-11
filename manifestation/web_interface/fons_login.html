@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+                        <!DOCTYPE html>
 <!--
 * UBICACIÓN: OmniaMentis/manifestation/web_interface/fons_login.html
 * PROPÓSITO: Pantalla de autenticación para el panel de moderación de
@@ -7,8 +7,16 @@
 *            redirige aquí (ver js/fons_auth_guard.js).
 * DEPENDENCIAS: backend POST /api/auth/login (src/api/main_flask.py)
 * CREADO: 2026-06-30
-* ÚLTIMA MODIFICACIÓN: 2026-07-02
+* ÚLTIMA MODIFICACIÓN: 2026-10-10
 * ESTADO: Producción
+*
+* CAMBIO 2026-10-10: "Error de conexión: Failed to fetch" sin pistas.
+* (1) La URL por defecto ya no es siempre http://localhost:8000: usa el
+* mismo host con el que se abrió la página (ver defaultApiUrl()).
+* (2) La pantalla muestra a qué backend se conectará y comprueba
+* /health al cargar, indicando si la API no responde, para distinguir
+* "API apagada" de "URL guardada vieja" o de un bloqueo CORS.
+* (3) El mensaje de error explica las causas probables.
 *
 * CAMBIO 2026-07-02: resolveApiUrl() ahora revisa 'fons_api_url' antes
 * de 'omnia_api_url' — misma prioridad exacta que fons_panel.html y
@@ -148,18 +156,28 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   </form>
 
   <div class="api-config">
+    <div id="apiStatus" style="font-size:11px;margin-bottom:8px;opacity:.8;word-break:break-all;"></div>
     <button type="button" id="cfgBtn">⚙ Configurar URL del backend</button>
   </div>
 </div>
 
 <script>
+// Por defecto usa el MISMO host con el que se abrió la página (localhost o
+// 127.0.0.1) para no mezclar "sitios" distintos; si se abrió como archivo
+// (file://) o desde otro dominio, cae a 127.0.0.1.
+function defaultApiUrl() {
+  const h = location.hostname;
+  const loopback = (h === 'localhost' || h === '127.0.0.1');
+  return `http://${loopback ? h : '127.0.0.1'}:8000`;
+}
+
 function resolveApiUrl() {
   // Misma prioridad que fons_panel.html y js/fons_auth_guard.js:
   // fons_api_url (configurado desde el panel) tiene precedencia.
   return (
     localStorage.getItem('fons_api_url') ||
     localStorage.getItem('omnia_api_url') ||
-    'http://localhost:8000'
+    defaultApiUrl()
   );
 }
 let API = resolveApiUrl();
@@ -175,8 +193,24 @@ cfgBtn.addEventListener('click', () => {
   if (value) {
     API = value.trim().replace(/\/$/, '');
     localStorage.setItem('fons_api_url', API);
+    checkBackend();
   }
 });
+
+// Comprueba /health y muestra el resultado bajo el formulario.
+async function checkBackend() {
+  const el = document.getElementById('apiStatus');
+  el.textContent = `Backend: ${API} — comprobando...`;
+  try {
+    const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(4000) });
+    el.textContent = r.ok
+      ? `Backend: ${API} — ✔ API activa`
+      : `Backend: ${API} — respondió HTTP ${r.status}`;
+  } catch (err) {
+    el.textContent = `Backend: ${API} — ✖ sin respuesta (API apagada, URL incorrecta o bloqueada por CORS)`;
+  }
+}
+checkBackend();
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -209,7 +243,10 @@ form.addEventListener('submit', async (e) => {
     window.location.href = 'fons_panel.html';
 
   } catch (err) {
-    errorMsg.textContent = `Error de conexión: ${err.message}`;
+    errorMsg.textContent = `No se pudo conectar con ${API} (${err.message}). ` +
+      'Verifica que la API esté corriendo, que la URL sea correcta (botón de abajo) ' +
+      'y que esta página se abrió por http://127.0.0.1:8080 o http://localhost:8080.';
+    checkBackend();
   } finally {
     submitBtn.disabled = false;
     submitBtn.textContent = 'Ingresar';

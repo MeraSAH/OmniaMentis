@@ -56,6 +56,13 @@
     redirectToLogin();
   }
 
+  function defaultApiUrl() {
+    // Mismo host con el que se abrió la página; file:// u otro dominio -> 127.0.0.1.
+    const h = location.hostname;
+    const loopback = (h === 'localhost' || h === '127.0.0.1');
+    return `http://${loopback ? h : '127.0.0.1'}:8000`;
+  }
+
   function resolveApiUrl() {
     // Misma prioridad que fons_panel.html: fons_api_url (configurado
     // desde el propio panel) tiene precedencia sobre omnia_api_url
@@ -63,7 +70,7 @@
     return (
       localStorage.getItem('fons_api_url') ||
       localStorage.getItem('omnia_api_url') ||
-      'http://localhost:8000'
+      defaultApiUrl()
     );
   }
 
