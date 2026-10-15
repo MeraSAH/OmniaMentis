@@ -7,7 +7,35 @@
 * DEPENDENCIAS: flask, flask-cors, requests (ver requirements.txt);
 *            core.auth.fons_auth (stdlib only)
 * CREADO: 2026-06-14
-* ÚLTIMA MODIFICACIÓN: 2026-10-11
+* ÚLTIMA MODIFICACIÓN: 2026-10-14
+*
+* CAMBIO 2026-10-14 -- RESOLUCIONES DEL ESPECIALISTA:
+*   (1) Edad: 13-14 años exigen confirmación VERIFICABLE del representante
+*   legal (enlace único enviado a su correo; POST /api/account/guardian/confirm
+*   y /guardian/resend). La cuenta nace pendiente y no inicia sesión hasta
+*   entonces. Se eliminó la casilla declarativa; 15-17 años consienten solos.
+*   Sin SMTP el registro de 13-14 años responde 503 (falla cerrado).
+*   (2) Riesgo crítico (autolesión, violencia, violencia sexual, seguridad
+*   infantil): la respuesta con ECU 911 y la línea 171 opción 6 se entrega al
+*   instante (no espera al Fons) y el modelo no genera nada.
+*   (3) Retención: los registros éticos se anonimizan a los 180 días
+*   (ETHICS_RETENTION_DAYS); las cuentas de 13-14 años sin confirmar se
+*   borran a los 30 días. Corre al arrancar y cada hora.
+*   (4) Cookie de sesión: 30 días para visitantes anónimos (desde su última
+*   visita) y 365 para cuentas con sesión iniciada.
+*
+* CAMBIO 2026-10-11 (b) -- CUMPLIMIENTO DE PRIVACIDAD:
+*   (1) El registro exige consentimiento explícito (Términos+Privacidad,
+*   contenido emocional y, en menores de 18, declaración del
+*   representante) ligado a TERMS_VERSION; se guarda versión y fecha.
+*   (2) POST /api/account/export: descarga de todos los datos de la cuenta
+*   (derecho de acceso/portabilidad), con contraseña.
+*   (3) Al borrar la cuenta también se anonimiza lo guardado por el sistema
+*   ético (OmniaEthics.erase_user_data).
+*   (4) La analítica de investigación (ResearchAnalytics) queda DESACTIVADA
+*   por defecto (OMNIA_RESEARCH_LOGGING=true para activarla) y, activada,
+*   no guarda el texto de los mensajes. Antes acumulaba en memoria, sin
+*   límite, los mensajes de todos los usuarios mezclados.
 *
 * CAMBIO 2026-10-11 -- CUENTAS REALES (registro, login, perfil):
 *   Nuevo core/auth/accounts.py (SQLite data/accounts.db, PBKDF2, código de
@@ -165,7 +193,7 @@ import shutil
 import threading
 from pathlib import Path
 from urllib.parse import urlsplit
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Optional, Dict, Any
 
@@ -175,6 +203,7 @@ SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
 
 from flask import Flask, request, jsonify, Response, session, has_request_context
+from flask.sessions import SecureCookieSessionInterface
 from flask_cors import CORS
 
 # ==================== IMPORTS OMNIA ====================
@@ -189,10 +218,14 @@ from core.mind.spacy_intent import SpaCyIntentClassifier
 from dotenv import load_dotenv
 from core.auth.fons_auth import verify_password, verify_session_token, create_session_token
 from core.auth.accounts import (
+    TERMS_VERSION,
     AccountStore, AccountError, InvalidEmail, WeakPassword, EmailTaken,
     IdentityInUse, InvalidBirthDate, UnderageError, InvalidDisplayName,
-    InvalidCredentials, AccountNotFound,
+    InvalidCredentials, AccountNotFound, ConsentRequired, TermsOutdated,
+    GuardianRequired, GuardianPending, GuardianTokenInvalid,
+    GuardianResendTooSoon, GuardianMailUnavailable,
 )
+from core.auth import guardian_mail
 from living_memory.gestation_diary import GestationDiary
 from analytics.research_analytics import ResearchAnalytics
 from router.integration import route_or_none, get_registered_modules
@@ -234,6 +267,25 @@ if not APP_SECRET_KEY:
     )
 app.secret_key = APP_SECRET_KEY
 app.permanent_session_lifetime = timedelta(days=365)
+
+ANON_COOKIE_DAYS = 30        # visitantes anónimos: desde su última visita
+ACCOUNT_COOKIE_DAYS = 365    # cuentas con sesión iniciada (evita re-login diario)
+
+
+class _OmniaSessionInterface(SecureCookieSessionInterface):
+    """Cookie de sesión con vigencia según quién la lleva: 30 días para
+    visitantes anónimos y 365 para cuentas con sesión iniciada. Una cookie
+    de un año para quien nunca se registró no es "estrictamente necesaria"
+    (resolución del especialista, 2026-10-14)."""
+
+    def get_expiration_time(self, app, session):
+        if not session.permanent:
+            return None
+        days = ACCOUNT_COOKIE_DAYS if session.get("account_id") else ANON_COOKIE_DAYS
+        return datetime.now(timezone.utc) + timedelta(days=days)
+
+
+app.session_interface = _OmniaSessionInterface()
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = (
     os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
@@ -341,9 +393,12 @@ def check_rate_limit(client_ip: str, max_req: int = 30, window: int = 60) -> boo
 ACCOUNT_RATE_LIMITS = {
     "register": (10, 3600),
     "login": (10, 60),
+    "export": (5, 3600),
     "recover": (5, 600),
     "password": (10, 600),
     "delete": (5, 3600),
+    "guardian": (10, 600),
+    "guardian_resend": (5, 3600),
 }
 _ACCOUNT_RATE_HORIZON = 3600.0
 _account_rate: Dict[str, list] = {}
@@ -600,6 +655,12 @@ def _load_profile_name(user_id: str) -> Optional[str]:
         logger.warning(f"[{user_id[:8]}] No se pudo leer el perfil: {e}")
         return None
     return profile.get("display_name") if profile else None
+
+
+def _research_logging_enabled() -> bool:
+    """La analítica de investigación es opt-in (OMNIA_RESEARCH_LOGGING=true).
+    Se lee en cada llamada para poder cambiarla sin reiniciar los tests."""
+    return os.environ.get("OMNIA_RESEARCH_LOGGING", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _create_user_session(user_id: str) -> Dict[str, Any]:
@@ -900,6 +961,39 @@ def initialize_shared() -> None:
     print(f"{'='*60}\n")
 
 
+def run_retention() -> Dict[str, Any]:
+    """Cumple los plazos de conservación: anonimiza los registros éticos
+    vencidos (ETHICS_RETENTION_DAYS, 180 por defecto) y borra las cuentas de
+    13-14 años que nadie confirmó en GUARDIAN_PENDING_PRUNE_DAYS (30) días.
+    Nunca lanza: un fallo se registra y se reintenta en la hora siguiente."""
+    from core.essence.ethics import ETHICS_RETENTION_DAYS
+    from core.auth.accounts import GUARDIAN_PENDING_PRUNE_DAYS
+    result: Dict[str, Any] = {"ethics": None, "unconfirmed_accounts": 0}
+    try:
+        ethics = _shared.get("ethics")
+        if ethics is not None:
+            days = _env_number("ETHICS_RETENTION_DAYS", ETHICS_RETENTION_DAYS, float)
+            result["ethics"] = ethics.anonymize_expired(days)
+            if any(result["ethics"].values()):
+                logger.info(f"Retención: registros éticos anonimizados {result['ethics']}")
+    except Exception as e:
+        logger.error(f"Retención ética falló: {e}")
+    try:
+        store = _shared.get("accounts")
+        if store is not None:
+            days = _env_number("GUARDIAN_PENDING_PRUNE_DAYS", GUARDIAN_PENDING_PRUNE_DAYS, float)
+            for uid in store.prune_unconfirmed(days):
+                result["unconfirmed_accounts"] += 1
+                d = USERS_DIR / uid
+                if _UUID_RE.match(uid) and d.is_dir() and not d.is_symlink():
+                    shutil.rmtree(d, ignore_errors=True)
+            if result["unconfirmed_accounts"]:
+                logger.info(f"Retención: {result['unconfirmed_accounts']} cuentas sin confirmar borradas")
+    except Exception as e:
+        logger.error(f"Retención de cuentas sin confirmar falló: {e}")
+    return result
+
+
 def _start_autosave_thread() -> None:
     """Hilo en background: guarda TODOS los usuarios activos cada 60s,
     como red de seguridad independiente del guardado tras cada chat."""
@@ -914,6 +1008,7 @@ def _start_autosave_thread() -> None:
                 _prune_rate_tables()
                 if tick % 60 == 0:  # una vez por hora
                     prune_empty_users()
+                    run_retention()
                 with _sessions_lock:
                     n = len(_user_sessions)
                 logger.debug(f"Autoguardado periódico ejecutado ({n} sesiones)")
@@ -974,6 +1069,9 @@ _ACCOUNT_STATUS = {
     InvalidEmail: 400, WeakPassword: 400, InvalidBirthDate: 400,
     InvalidDisplayName: 400, UnderageError: 403, EmailTaken: 409,
     IdentityInUse: 409, InvalidCredentials: 401, AccountNotFound: 404,
+    ConsentRequired: 400, TermsOutdated: 409,
+    GuardianRequired: 400, GuardianPending: 403, GuardianTokenInvalid: 400,
+    GuardianResendTooSoon: 429, GuardianMailUnavailable: 503,
 }
 
 
@@ -1125,7 +1223,24 @@ def account_register():
         data.get("password"),
         data.get("birth_date"),
         data.get("display_name"),
+        consent=data.get("consent"),
+        require_consent=True,
+        guardian_email=data.get("guardian_email"),
     )
+    if profile.get("guardian_pending"):
+        # 13-14 años: la cuenta queda PENDIENTE hasta que el representante
+        # confirme desde su correo. No se inicia sesión.
+        _send_guardian_mail(store, user_id, profile)
+        session.clear()
+        return jsonify({
+            "profile": profile,
+            "recovery_code": code,
+            "guardian_pending": True,
+            "message": (
+                "Cuenta creada. Falta la confirmación de tu madre, padre o representante legal: "
+                "le enviamos un correo con un enlace. Hasta que confirme no podrás entrar."
+            ),
+        }), 201
     version = store.get_session_version(user_id)
     _start_account_session(user_id, version)
     with _sessions_lock:
@@ -1137,6 +1252,67 @@ def account_register():
         "recovery_code": code,
         "message": "Cuenta creada. Guarda el código de recuperación: no se volverá a mostrar.",
     }), 201
+
+
+def _send_guardian_mail(store: AccountStore, user_id: str, profile: Dict[str, Any],
+                        guardian_email: Any = None, aborting_deletes: bool = True) -> None:
+    """Emite el enlace y lo envía al representante. Si el correo no sale y la
+    cuenta es nueva (`aborting_deletes`), se borra: no se deja una cuenta que
+    nadie puede activar. Lanza GuardianMailUnavailable si falla."""
+    try:
+        if not guardian_mail.is_configured():
+            raise guardian_mail.MailError("sin SMTP")
+        target, token = store.issue_guardian_token(user_id, guardian_email)
+        try:
+            guardian_mail.send_guardian_link(
+                target, token, profile.get("email", ""), profile.get("display_name"))
+        except guardian_mail.MailError:
+            store.release_guardian_cooldown(user_id)
+            raise
+    except guardian_mail.MailError:
+        if aborting_deletes:
+            store.abort_pending(user_id)
+        raise GuardianMailUnavailable(
+            "Ahora mismo no podemos enviar el correo al representante, por eso el registro de "
+            "personas de 13 y 14 años no está disponible. Inténtalo más tarde."
+        )
+
+
+@app.post("/api/account/guardian/confirm")
+def account_guardian_confirm():
+    """El representante legal confirma desde el enlace de su correo.
+    Body: {"token", "consent": {"version","terms","sensitive"}}."""
+    store = _accounts()
+    limited = _rate_limited("guardian")
+    if limited:
+        return limited
+    data = _json_body()
+    store.confirm_guardian(data.get("token"), data.get("consent"))
+    return jsonify({
+        "confirmed": True,
+        "message": "Gracias. La cuenta ya puede iniciar sesión.",
+    })
+
+
+@app.post("/api/account/guardian/resend")
+def account_guardian_resend():
+    """Reenvía (o corrige el correo de) la confirmación del representante.
+    Body: {"email","password","guardian_email"?}. Exige la contraseña de la cuenta."""
+    store = _accounts()
+    limited = _rate_limited("guardian_resend")
+    if limited:
+        return limited
+    data = _json_body()
+    profile, _version = store.authenticate(
+        data.get("email"), data.get("password"), allow_pending=True)
+    if not profile.get("guardian_pending"):
+        raise GuardianTokenInvalid("Esta cuenta no necesita confirmación del representante")
+    _send_guardian_mail(store, profile["user_id"], profile,
+                        guardian_email=data.get("guardian_email"), aborting_deletes=False)
+    return jsonify({
+        "sent": True,
+        "message": "Listo: enviamos de nuevo el correo a tu representante.",
+    })
 
 
 @app.post("/api/account/login")
@@ -1233,6 +1409,50 @@ def account_recover():
     })
 
 
+@app.post("/api/account/export")
+def account_export():
+    """Descarga de TODOS los datos de la cuenta (acceso y portabilidad).
+    Exige la contraseña. Incluye ecos de memoria y diario de Omnia."""
+    aid, err = _login_required()
+    if err:
+        return err
+    limited = _rate_limited("export")
+    if limited:
+        return limited
+    data = _json_body()
+    account = _accounts().export_account(aid, data.get("password"))
+    sess = get_user_session(aid)
+    try:
+        echoes = sess["memory"].get_all_echoes()
+    except Exception as e:
+        logger.warning(f"[{aid[:8]}] Exportación: no se pudieron leer los ecos: {e}")
+        echoes = []
+    try:
+        diary = sess["diary"].get_recent_entries(1_000_000)
+    except Exception as e:
+        logger.warning(f"[{aid[:8]}] Exportación: no se pudo leer el diario: {e}")
+        diary = []
+    payload = {
+        "exported_at": datetime.now().astimezone().isoformat(),
+        "terms_version": TERMS_VERSION,
+        "account": account,
+        "omnia": {
+            "consciousness_level": sess["identity"].consciousness_level,
+            "name_said_in_chat": sess.get("user_name"),
+            "memory_echoes": echoes,
+            "diary_entries": diary,
+        },
+        "note": (
+            "Los mensajes marcados por el sistema ético para revisión humana "
+            "se anonimizan al borrar la cuenta y no forman parte de esta descarga."
+        ),
+    }
+    resp = jsonify(payload)
+    resp.headers["Content-Disposition"] = 'attachment; filename="omniamentis-mis-datos.json"'
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @app.delete("/api/account")
 def account_delete():
     """Borra la cuenta y TODOS sus datos (derecho de supresión). Exige la contraseña."""
@@ -1258,6 +1478,15 @@ def account_delete():
     user_dir = USERS_DIR / aid
     if _UUID_RE.match(aid) and user_dir.is_dir() and not user_dir.is_symlink():
         shutil.rmtree(user_dir, ignore_errors=True)
+    # Lo que el sistema ético guardó de esta persona (casos revisados por el
+    # Fons) también se anonimiza. Si fallara, la cuenta ya está borrada: se
+    # deja constancia en el log para limpiarlo a mano.
+    try:
+        if _shared.get("ethics") is not None:
+            counts = _shared["ethics"].erase_user_data(aid)
+            logger.info(f"[{aid[:8]}] Registros éticos anonimizados: {counts}")
+    except Exception as e:
+        logger.error(f"[{aid[:8]}] NO se pudieron anonimizar los registros éticos: {e}")
     session.clear()
     logger.info(f"[{aid[:8]}] Cuenta y datos eliminados")
     return jsonify({"deleted": True})
@@ -1512,6 +1741,12 @@ def chat_endpoint():
         if fons_status == FonsStatus.INACTIVE:
             silens_msg = _shared["ethics"].get_fons_inactive_response()
 
+        # RIESGO CRÍTICO: la ayuda (ECU 911, línea 171 opción 6) se entrega YA,
+        # sin depender de que El Fons esté conectado y sin pasar por el modelo.
+        crisis = _shared["ethics"].crisis_category(ethical.reason)
+        if crisis:
+            silens_msg = _shared["ethics"].get_crisis_response(crisis)
+
         consultation_id = None
         try:
             consultation_id = _shared["ethics"].request_fons_approval(
@@ -1546,6 +1781,7 @@ def chat_endpoint():
             "consultation_id": consultation_id,
             "ban_recommended": ban_recommended,
             "ban_reason": ban_reason,
+            "critical_risk": bool(crisis),
         })
 
     # 2. ROUTER DE MÓDULOS — solo si ya pasó ética.
@@ -1648,8 +1884,9 @@ def chat_endpoint():
 
     # 8. Logging de investigación (agregado del sistema, no por usuario).
     try:
-        if _shared["research"]:
-            _shared["research"].log_interaction(user_message, response)
+        if _shared["research"] and _research_logging_enabled():
+            # store_text=False: solo métricas, nunca el texto de las personas.
+            _shared["research"].log_interaction(user_message, response, store_text=False)
             _shared["research"].log_consciousness_reading(new_consciousness)
     except Exception:
         pass
@@ -1799,6 +2036,7 @@ def get_ethics_status():
 if __name__ == "__main__":
     initialize_shared()
     prune_empty_users()
+    run_retention()
 
     import atexit
     atexit.register(save_all_sessions)

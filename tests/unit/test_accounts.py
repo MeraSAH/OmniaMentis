@@ -12,6 +12,7 @@
 * inyectan: ningún test depende de la hora real.
 """
 
+import re
 import sqlite3
 import sys
 import threading
@@ -27,12 +28,18 @@ from core.auth import accounts as acc
 from core.auth.accounts import (
     AccountNotFound,
     AccountStore,
+    ConsentRequired,
     EmailTaken,
+    GuardianPending,
+    GuardianRequired,
+    GuardianResendTooSoon,
+    GuardianTokenInvalid,
     IdentityInUse,
     InvalidBirthDate,
     InvalidCredentials,
     InvalidDisplayName,
     InvalidEmail,
+    TermsOutdated,
     UnderageError,
     WeakPassword,
 )
@@ -256,7 +263,8 @@ class TestRegister:
 
     def test_profile_never_exposes_secrets(self, store):
         profile, _ = register(store)
-        assert set(profile) == {"user_id", "email", "display_name", "age_band", "created_at"}
+        assert set(profile) == {"user_id", "email", "display_name", "age_band", "created_at",
+                                "guardian_pending"}
 
     def test_password_is_not_stored_in_plain_text(self, store, tmp_path):
         register(store, password="mi-clave-secreta-99")
@@ -733,3 +741,553 @@ class TestPersistenceAndThreads:
                 "INSERT INTO external_identities (provider, subject, account_id, created_at)"
                 " VALUES ('x', 'y', 'no-existe', 0)"
             )
+
+
+# ── Consentimiento (2026-10-11) ──────────────────────────────────────────────
+
+def good_consent(**over):
+    c = {"version": acc.TERMS_VERSION, "terms": True, "sensitive": True, "guardian": False}
+    c.update(over)
+    return c
+
+
+def register_c(store, consent, birth=ADULT_BIRTH, email="ana@example.com", require=True):
+    return store.register(new_id(), email, GOOD_PW, birth, None,
+                          consent=consent, require_consent=require)
+
+
+class TestValidateConsent:
+
+    def test_adult_with_both_acceptances(self):
+        r = acc.validate_consent("adult", good_consent())
+        assert r == {"terms_version": acc.TERMS_VERSION, "guardian_declared": False}
+
+    @pytest.mark.parametrize("bad", [None, "si", 1, True, [], ()])
+    def test_non_dict_is_rejected(self, bad):
+        with pytest.raises(ConsentRequired):
+            acc.validate_consent("adult", bad)
+
+    @pytest.mark.parametrize("field,value", [
+        (f, v) for f in ("terms", "sensitive")
+        for v in (False, None, "true", 1, "on", 0, "yes")
+    ])
+    def test_only_json_true_counts(self, field, value):
+        with pytest.raises(ConsentRequired):
+            acc.validate_consent("adult", good_consent(**{field: value}))
+
+    @pytest.mark.parametrize("field", ["terms", "sensitive"])
+    def test_missing_field_is_rejected(self, field):
+        c = good_consent()
+        del c[field]
+        with pytest.raises(ConsentRequired):
+            acc.validate_consent("adult", c)
+
+    def test_missing_version_is_consent_required_not_outdated(self):
+        with pytest.raises(ConsentRequired):
+            acc.validate_consent("adult", {"terms": True, "sensitive": True})
+        with pytest.raises(ConsentRequired):
+            acc.validate_consent("adult", {})
+
+    @pytest.mark.parametrize("version", [None, "", "2020-01-01", 20261011])
+    def test_wrong_version_is_terms_outdated(self, version):
+        with pytest.raises(TermsOutdated):
+            acc.validate_consent("adult", good_consent(version=version))
+
+    @pytest.mark.parametrize("band", ["minor", "minor_basic", "adult"])
+    def test_declarative_guardian_flag_no_longer_counts(self, band):
+        """Resolución 2026-10-14: la casilla declarativa se eliminó. El
+        consentimiento de 13-14 años lo da el representante por correo
+        (confirm_guardian); 15-17 consienten solos."""
+        assert acc.validate_consent(band, good_consent())["guardian_declared"] is False
+        assert acc.validate_consent(band, good_consent(guardian=True))["guardian_declared"] is False
+
+    def test_error_codes_are_stable(self):
+        assert ConsentRequired.code == "consent_required"
+        assert TermsOutdated.code == "terms_outdated"
+
+    def test_version_is_a_date_string(self):
+        assert re.match(r"^\d{4}-\d{2}-\d{2}$", acc.TERMS_VERSION)
+
+
+class TestConsentStorage:
+
+    def test_registration_requires_consent_when_asked(self, store):
+        with pytest.raises(ConsentRequired):
+            register_c(store, None)
+        assert store.count() == 0
+
+    def test_failed_consent_creates_no_account(self, store):
+        with pytest.raises(ConsentRequired):
+            register_c(store, good_consent(sensitive=False))
+        assert store.count() == 0
+
+    def test_minor_of_15_to_17_consents_alone(self, store):
+        profile, _ = register_c(store, good_consent(), birth="2010-03-01")
+        assert profile["age_band"] == "minor_basic"
+        assert profile["guardian_pending"] is False
+        assert store.get_consent(profile["user_id"])["guardian_declared"] is False
+
+    def test_consent_is_stored_with_version_and_timestamps(self, store, clock):
+        profile, _ = register_c(store, good_consent())
+        c = store.get_consent(profile["user_id"])
+        assert c["terms_version"] == acc.TERMS_VERSION
+        assert c["terms_accepted_at"] == c["sensitive_consent_at"]
+        assert c["terms_accepted_at"].endswith("+00:00")
+        assert c["guardian_declared"] is False
+
+    def test_consent_is_not_part_of_the_public_profile(self, store):
+        profile, _ = register_c(store, good_consent())
+        assert set(profile) == {"user_id", "email", "display_name", "age_band", "created_at",
+                                "guardian_pending"}
+
+    def test_without_requirement_and_without_consent_nothing_is_recorded(self, store):
+        profile, _ = register(store)
+        assert store.get_consent(profile["user_id"]) is None
+
+    def test_consent_given_without_requirement_is_still_validated(self, store):
+        with pytest.raises(ConsentRequired):
+            register_c(store, good_consent(terms=False), require=False)
+
+    def test_get_consent_of_unknown_account_is_none(self, store):
+        assert store.get_consent(new_id()) is None
+
+    def test_consent_dies_with_the_account(self, store):
+        profile, _ = register_c(store, good_consent())
+        store.delete_account(profile["user_id"], GOOD_PW)
+        assert store.get_consent(profile["user_id"]) is None
+
+
+class TestMigration:
+
+    def test_old_database_without_consent_columns_is_upgraded(self, tmp_path):
+        path = tmp_path / "old.db"
+        con = sqlite3.connect(path)
+        con.executescript("""
+            CREATE TABLE accounts (
+                id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+                display_name TEXT, birth_date TEXT NOT NULL,
+                session_version INTEGER NOT NULL DEFAULT 1,
+                failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until REAL NOT NULL DEFAULT 0,
+                recovery_hash TEXT NOT NULL, recovery_failed INTEGER NOT NULL DEFAULT 0,
+                recovery_locked_until REAL NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL, updated_at REAL NOT NULL, last_login_at REAL);
+        """)
+        uid = new_id()
+        con.execute(
+            "INSERT INTO accounts (id, email, password_hash, birth_date, recovery_hash,"
+            " created_at, updated_at) VALUES (?, 'viejo@example.com', ?, '1990-05-20', 'x', 1, 1)",
+            (uid, acc.hash_password(GOOD_PW, 1000)),
+        )
+        con.commit()
+        con.close()
+
+        s = AccountStore(path, pbkdf2_iterations=1000, today=lambda: TODAY)
+        try:
+            assert s.get_profile(uid)["email"] == "viejo@example.com"
+            assert s.get_consent(uid) is None            # cuenta anterior: sin registro
+            profile, _ = s.authenticate("viejo@example.com", GOOD_PW)
+            assert profile["user_id"] == uid
+            new_profile, _ = s.register(new_id(), "nuevo@example.com", GOOD_PW, ADULT_BIRTH,
+                                        None, consent=good_consent(), require_consent=True)
+            assert s.get_consent(new_profile["user_id"])["terms_version"] == acc.TERMS_VERSION
+        finally:
+            s.close()
+
+    def test_reopening_a_current_database_is_harmless(self, tmp_path):
+        path = tmp_path / "a.db"
+        s1 = AccountStore(path, pbkdf2_iterations=1000, today=lambda: TODAY)
+        profile, _ = s1.register(new_id(), "a@example.com", GOOD_PW, ADULT_BIRTH,
+                                 None, consent=good_consent(), require_consent=True)
+        s1.close()
+        s2 = AccountStore(path, pbkdf2_iterations=1000, today=lambda: TODAY)
+        try:
+            assert s2.get_consent(profile["user_id"]) is not None
+        finally:
+            s2.close()
+
+
+class TestExportAccount:
+
+    def test_returns_owner_data_including_birth_date(self, store):
+        profile, _ = register_c(store, good_consent())
+        data = store.export_account(profile["user_id"], GOOD_PW)
+        assert data["email"] == "ana@example.com"
+        assert data["birth_date"] == ADULT_BIRTH
+        assert data["age_band"] == "adult"
+        assert data["consent"]["terms_version"] == acc.TERMS_VERSION
+        assert data["created_at"].endswith("+00:00")
+
+    def test_never_includes_secrets(self, store):
+        profile, code = register_c(store, good_consent())
+        raw = repr(store.export_account(profile["user_id"], GOOD_PW))
+        assert "pbkdf2" not in raw
+        assert code not in raw
+        assert "recovery" not in raw and "password" not in raw
+
+    def test_wrong_password_is_invalid_credentials(self, store):
+        profile, _ = register_c(store, good_consent())
+        with pytest.raises(InvalidCredentials):
+            store.export_account(profile["user_id"], "otra-clave-larga-1")
+
+    def test_wrong_passwords_count_towards_lockout(self, store):
+        profile, _ = register_c(store, good_consent())
+        for _ in range(acc.MAX_FAILED_ATTEMPTS):
+            with pytest.raises(InvalidCredentials):
+                store.export_account(profile["user_id"], "otra-clave-larga-1")
+        with pytest.raises(InvalidCredentials):
+            store.export_account(profile["user_id"], GOOD_PW)
+
+    def test_unknown_account_is_invalid_credentials(self, store):
+        with pytest.raises(InvalidCredentials):
+            store.export_account(new_id(), GOOD_PW)
+
+    def test_account_without_consent_record_exports_none(self, store):
+        profile, _ = register(store)
+        assert store.export_account(profile["user_id"], GOOD_PW)["consent"] is None
+
+
+# ── Representante legal, 13-14 años (resolución 2026-10-14) ──────────────────
+
+MINOR_BIRTH = "2012-03-01"        # 14 años con TODAY = 2026-10-10 -> banda "minor"
+TEEN_BIRTH = "2010-03-01"         # 16 años -> consiente solo
+GUARDIAN = "mama@example.com"
+
+
+def register_minor(store, email="nino@example.com", guardian=GUARDIAN, consent=None, **kw):
+    return store.register(new_id(), email, GOOD_PW, MINOR_BIRTH, None,
+                          consent=consent or good_consent(), require_consent=True,
+                          guardian_email=guardian, **kw)
+
+
+def confirm_consent(**over):
+    c = {"version": acc.TERMS_VERSION, "terms": True, "sensitive": True}
+    c.update(over)
+    return c
+
+
+class TestGuardianRegistration:
+
+    def test_minor_needs_a_guardian_email(self, store):
+        with pytest.raises(GuardianRequired):
+            register_minor(store, guardian=None)
+        with pytest.raises(GuardianRequired):
+            register_minor(store, guardian="")
+        assert store.count() == 0
+
+    @pytest.mark.parametrize("bad", ["no-es-email", "a@b", 12, ["x@y.com"], "x@@y.com"])
+    def test_invalid_guardian_email_is_rejected(self, store, bad):
+        with pytest.raises(GuardianRequired):
+            register_minor(store, guardian=bad)
+        assert store.count() == 0
+
+    def test_guardian_email_must_differ_from_own(self, store):
+        with pytest.raises(GuardianRequired):
+            register_minor(store, email="nino@example.com", guardian="NINO@example.com")
+        assert store.count() == 0
+
+    def test_minor_account_is_born_pending(self, store):
+        profile, _ = register_minor(store)
+        assert profile["age_band"] == "minor"
+        assert profile["guardian_pending"] is True
+        assert store.get_consent(profile["user_id"])["guardian_confirmed_at"] is None
+
+    def test_teen_15_to_17_is_not_pending_and_needs_no_guardian(self, store):
+        profile, _ = store.register(new_id(), "t@example.com", GOOD_PW, TEEN_BIRTH, None,
+                                    consent=good_consent(), require_consent=True)
+        assert profile["age_band"] == "minor_basic"
+        assert profile["guardian_pending"] is False
+
+    def test_adult_ignores_and_does_not_store_a_guardian_email(self, store):
+        profile, _ = store.register(new_id(), "a@example.com", GOOD_PW, ADULT_BIRTH, None,
+                                    consent=good_consent(), require_consent=True,
+                                    guardian_email=GUARDIAN)
+        assert profile["guardian_pending"] is False
+        assert store.export_account(profile["user_id"], GOOD_PW)["guardian"] is None
+
+    def test_guardian_email_is_optional_without_the_consent_requirement(self, store):
+        profile, _ = store.register(new_id(), "n@example.com", GOOD_PW, MINOR_BIRTH, None)
+        assert profile["guardian_pending"] is True      # sin confirmar: sigue bloqueada
+
+    def test_under_13_is_still_refused(self, store):
+        with pytest.raises(acc.UnderageError):
+            store.register(new_id(), "k@example.com", GOOD_PW, "2015-01-01", None,
+                           consent=good_consent(), require_consent=True, guardian_email=GUARDIAN)
+
+
+class TestGuardianLoginGate:
+
+    def test_pending_account_cannot_log_in(self, store):
+        register_minor(store)
+        with pytest.raises(GuardianPending):
+            store.authenticate("nino@example.com", GOOD_PW)
+
+    def test_wrong_password_does_not_reveal_pending_state(self, store):
+        register_minor(store)
+        with pytest.raises(InvalidCredentials):
+            store.authenticate("nino@example.com", "otra-clave-larga-1")
+
+    def test_pending_login_attempt_does_not_record_a_login(self, store):
+        profile, _ = register_minor(store)
+        with pytest.raises(GuardianPending):
+            store.authenticate("nino@example.com", GOOD_PW)
+        assert store.export_account(profile["user_id"], GOOD_PW)["last_login_at"] is None
+
+    def test_allow_pending_returns_the_profile(self, store):
+        profile, _ = register_minor(store)
+        got, version = store.authenticate("nino@example.com", GOOD_PW, allow_pending=True)
+        assert got["user_id"] == profile["user_id"] and got["guardian_pending"] is True
+        assert version == 1
+
+    def test_error_codes_and_statuses_are_stable(self):
+        assert GuardianRequired.code == "guardian_email_required"
+        assert GuardianPending.code == "guardian_pending"
+        assert GuardianTokenInvalid.code == "guardian_token_invalid"
+        assert GuardianResendTooSoon.code == "guardian_resend_wait"
+        assert acc.GuardianMailUnavailable.code == "guardian_mail_unavailable"
+
+
+class TestGuardianToken:
+
+    def test_issue_returns_target_and_token(self, store):
+        profile, _ = register_minor(store)
+        target, token = store.issue_guardian_token(profile["user_id"])
+        assert target == GUARDIAN
+        assert len(token) >= 32
+
+    def test_token_is_never_stored_in_clear(self, store):
+        profile, _ = register_minor(store)
+        _, token = store.issue_guardian_token(profile["user_id"])
+        dump = repr([tuple(r) for r in store._conn.execute("SELECT * FROM accounts")])
+        assert token not in dump
+
+    def test_tokens_are_unique(self, store, clock):
+        profile, _ = register_minor(store)
+        _, t1 = store.issue_guardian_token(profile["user_id"])
+        clock.advance(acc.GUARDIAN_RESEND_COOLDOWN_SECONDS + 1)
+        _, t2 = store.issue_guardian_token(profile["user_id"])
+        assert t1 != t2
+
+    def test_adult_cannot_get_a_token(self, store):
+        profile, _ = register(store)
+        with pytest.raises(GuardianTokenInvalid):
+            store.issue_guardian_token(profile["user_id"])
+
+    def test_unknown_account(self, store):
+        with pytest.raises(AccountNotFound):
+            store.issue_guardian_token(new_id())
+
+    def test_resend_cooldown(self, store, clock):
+        profile, _ = register_minor(store)
+        store.issue_guardian_token(profile["user_id"])
+        with pytest.raises(GuardianResendTooSoon):
+            store.issue_guardian_token(profile["user_id"])
+        clock.advance(acc.GUARDIAN_RESEND_COOLDOWN_SECONDS + 1)
+        store.issue_guardian_token(profile["user_id"])
+
+    def test_released_cooldown_allows_immediate_retry(self, store):
+        profile, _ = register_minor(store)
+        store.issue_guardian_token(profile["user_id"])
+        store.release_guardian_cooldown(profile["user_id"])
+        store.issue_guardian_token(profile["user_id"])
+
+    def test_new_token_invalidates_the_previous_one(self, store, clock):
+        profile, _ = register_minor(store)
+        _, old = store.issue_guardian_token(profile["user_id"])
+        clock.advance(acc.GUARDIAN_RESEND_COOLDOWN_SECONDS + 1)
+        _, new = store.issue_guardian_token(profile["user_id"])
+        with pytest.raises(GuardianTokenInvalid):
+            store.confirm_guardian(old, confirm_consent())
+        assert store.confirm_guardian(new, confirm_consent()) is True
+
+    def test_guardian_email_can_be_corrected_while_pending(self, store, clock):
+        profile, _ = register_minor(store, guardian="mamaa@example.com")      # errata
+        clock.advance(acc.GUARDIAN_RESEND_COOLDOWN_SECONDS + 1)
+        target, _ = store.issue_guardian_token(profile["user_id"], "mama@example.com")
+        assert target == "mama@example.com"
+        assert store.export_account(profile["user_id"], GOOD_PW)["guardian"]["email"] == "mama@example.com"
+
+    def test_correction_still_validates_the_email(self, store, clock):
+        profile, _ = register_minor(store)
+        clock.advance(acc.GUARDIAN_RESEND_COOLDOWN_SECONDS + 1)
+        with pytest.raises(GuardianRequired):
+            store.issue_guardian_token(profile["user_id"], "nino@example.com")
+        with pytest.raises(GuardianRequired):
+            store.issue_guardian_token(profile["user_id"], "basura")
+
+    def test_legacy_pending_account_without_guardian_email_needs_one(self, store):
+        profile, _ = store.register(new_id(), "viejo@example.com", GOOD_PW, MINOR_BIRTH, None)
+        with pytest.raises(GuardianRequired):
+            store.issue_guardian_token(profile["user_id"])
+        target, token = store.issue_guardian_token(profile["user_id"], GUARDIAN)
+        assert target == GUARDIAN and token
+
+
+class TestGuardianConfirm:
+
+    def _pending(self, store):
+        profile, _ = register_minor(store)
+        _, token = store.issue_guardian_token(profile["user_id"])
+        return profile, token
+
+    def test_confirmation_unlocks_login_and_records_proof(self, store, clock):
+        profile, token = self._pending(store)
+        assert store.confirm_guardian(token, confirm_consent()) is True
+        got, _ = store.authenticate("nino@example.com", GOOD_PW)
+        assert got["guardian_pending"] is False
+        c = store.get_consent(profile["user_id"])
+        assert c["guardian_terms_version"] == acc.TERMS_VERSION
+        assert c["guardian_confirmed_at"].endswith("+00:00")
+
+    def test_token_is_single_use(self, store):
+        _, token = self._pending(store)
+        store.confirm_guardian(token, confirm_consent())
+        with pytest.raises(GuardianTokenInvalid):
+            store.confirm_guardian(token, confirm_consent())
+
+    def test_token_expires_after_seven_days(self, store, clock):
+        _, token = self._pending(store)
+        clock.advance(acc.GUARDIAN_TOKEN_TTL_SECONDS + 1)
+        with pytest.raises(GuardianTokenInvalid):
+            store.confirm_guardian(token, confirm_consent())
+
+    def test_token_still_valid_just_before_expiry(self, store, clock):
+        _, token = self._pending(store)
+        clock.advance(acc.GUARDIAN_TOKEN_TTL_SECONDS - 5)
+        assert store.confirm_guardian(token, confirm_consent()) is True
+
+    @pytest.mark.parametrize("bad", [None, "", "corto", 123, ["x"], "a" * 31, "a" * 129,
+                                     "con espacios " * 4, "%" * 40])
+    def test_malformed_tokens_are_invalid(self, store, bad):
+        self._pending(store)
+        with pytest.raises(GuardianTokenInvalid):
+            store.confirm_guardian(bad, confirm_consent())
+
+    def test_unknown_well_formed_token_is_invalid(self, store):
+        self._pending(store)
+        with pytest.raises(GuardianTokenInvalid):
+            store.confirm_guardian("A" * 43, confirm_consent())
+
+    @pytest.mark.parametrize("field", ["terms", "sensitive"])
+    def test_guardian_must_accept_everything(self, store, field):
+        _, token = self._pending(store)
+        with pytest.raises(ConsentRequired):
+            store.confirm_guardian(token, confirm_consent(**{field: False}))
+        with pytest.raises(ConsentRequired):
+            store.confirm_guardian(token, confirm_consent(**{field: "true"}))
+
+    def test_rejected_consent_does_not_burn_the_token(self, store):
+        _, token = self._pending(store)
+        with pytest.raises(ConsentRequired):
+            store.confirm_guardian(token, confirm_consent(sensitive=False))
+        assert store.confirm_guardian(token, confirm_consent()) is True
+
+    def test_outdated_text_version_is_rejected(self, store):
+        _, token = self._pending(store)
+        with pytest.raises(TermsOutdated):
+            store.confirm_guardian(token, confirm_consent(version="2020-01-01"))
+
+    def test_missing_consent_is_rejected(self, store):
+        _, token = self._pending(store)
+        with pytest.raises(ConsentRequired):
+            store.confirm_guardian(token, None)
+
+    def test_turning_15_unblocks_without_confirmation(self, tmp_path, clock):
+        today = {"d": TODAY}
+        s = AccountStore(tmp_path / "t.db", pbkdf2_iterations=1000, clock=clock,
+                         today=lambda: today["d"])
+        try:
+            s.register(new_id(), "nino@example.com", GOOD_PW, "2011-12-01", None,
+                       consent=good_consent(), require_consent=True, guardian_email=GUARDIAN)
+            with pytest.raises(GuardianPending):
+                s.authenticate("nino@example.com", GOOD_PW)
+            today["d"] = date(2026, 12, 2)                  # cumple 15
+            got, _ = s.authenticate("nino@example.com", GOOD_PW)
+            assert got["age_band"] == "minor_basic" and got["guardian_pending"] is False
+        finally:
+            s.close()
+
+
+class TestGuardianCleanup:
+
+    def test_abort_pending_deletes_only_pending_minors(self, store):
+        pending, _ = register_minor(store)
+        adult, _ = register(store, email="adulto@example.com")
+        assert store.abort_pending(adult["user_id"]) is False
+        assert store.exists(adult["user_id"])
+        assert store.abort_pending(pending["user_id"]) is True
+        assert not store.exists(pending["user_id"])
+        assert store.abort_pending(pending["user_id"]) is False
+
+    def test_abort_does_not_touch_confirmed_accounts(self, store):
+        profile, _ = register_minor(store)
+        _, token = store.issue_guardian_token(profile["user_id"])
+        store.confirm_guardian(token, confirm_consent())
+        assert store.abort_pending(profile["user_id"]) is False
+        assert store.exists(profile["user_id"])
+
+    def test_prune_unconfirmed_after_30_days(self, store, clock):
+        pending, _ = register_minor(store)
+        confirmed, _ = register_minor(store, email="otro@example.com", guardian="papa@example.com")
+        _, token = store.issue_guardian_token(confirmed["user_id"])
+        store.confirm_guardian(token, confirm_consent())
+        adult, _ = register(store, email="adulto@example.com")
+        clock.advance(31 * 86400)
+        removed = store.prune_unconfirmed()
+        assert removed == [pending["user_id"]]
+        assert not store.exists(pending["user_id"])
+        assert store.exists(confirmed["user_id"]) and store.exists(adult["user_id"])
+
+    def test_prune_keeps_recent_pending(self, store, clock):
+        pending, _ = register_minor(store)
+        clock.advance(29 * 86400)
+        assert store.prune_unconfirmed() == []
+        assert store.exists(pending["user_id"])
+
+    def test_prune_with_zero_days_is_disabled(self, store, clock):
+        register_minor(store)
+        clock.advance(400 * 86400)
+        assert store.prune_unconfirmed(0) == []
+
+
+class TestGuardianExportAndMigration:
+
+    def test_export_includes_guardian_proof(self, store):
+        profile, _ = register_minor(store)
+        _, token = store.issue_guardian_token(profile["user_id"])
+        store.confirm_guardian(token, confirm_consent())
+        data = store.export_account(profile["user_id"], GOOD_PW)
+        assert data["guardian"]["email"] == GUARDIAN
+        assert data["guardian"]["confirmed_at"].endswith("+00:00")
+        assert "token" not in repr(data).lower()
+
+    def test_old_database_gets_guardian_columns(self, tmp_path):
+        path = tmp_path / "old2.db"
+        con = sqlite3.connect(path)
+        con.executescript("""
+            CREATE TABLE accounts (
+                id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+                display_name TEXT, birth_date TEXT NOT NULL,
+                session_version INTEGER NOT NULL DEFAULT 1,
+                failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until REAL NOT NULL DEFAULT 0,
+                recovery_hash TEXT NOT NULL, recovery_failed INTEGER NOT NULL DEFAULT 0,
+                recovery_locked_until REAL NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL, updated_at REAL NOT NULL, last_login_at REAL,
+                terms_version TEXT, terms_accepted_at REAL, sensitive_consent_at REAL,
+                guardian_declared INTEGER NOT NULL DEFAULT 0);
+        """)
+        uid = new_id()
+        con.execute(
+            "INSERT INTO accounts (id, email, password_hash, birth_date, recovery_hash,"
+            " created_at, updated_at, guardian_declared) VALUES (?, 'm@example.com', ?, ?, 'x', 1, 1, 1)",
+            (uid, acc.hash_password(GOOD_PW, 1000), MINOR_BIRTH),
+        )
+        con.commit()
+        con.close()
+        s = AccountStore(path, pbkdf2_iterations=1000, today=lambda: TODAY)
+        try:
+            # La antigua casilla declarativa ya no vale: pasa a pendiente.
+            assert s.get_profile(uid)["guardian_pending"] is True
+            with pytest.raises(GuardianPending):
+                s.authenticate("m@example.com", GOOD_PW)
+        finally:
+            s.close()

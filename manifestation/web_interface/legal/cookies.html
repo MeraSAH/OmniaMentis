@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<!--
+* UBICACIÓN: OmniaMentis/manifestation/web_interface/legal/cookies.html
+* PROPÓSITO: Política de cookies y almacenamiento local de OmniaMentis.
+* VERSIÓN DE LOS TEXTOS: 2026-10-14 (ver TERMS_VERSION en accounts.py).
+* BASE: el servicio solo usa una cookie propia, técnica y necesaria (sesión
+*   firmada de Flask, HttpOnly, SameSite=Lax, 365 días). No hay analíticas,
+*   publicidad ni terceros, por lo que no se muestra un banner de
+*   consentimiento. Si algún día se añade algo no necesario, hay que pedir
+*   consentimiento previo y actualizar esta página.
+* AVISO: no es asesoría legal; debe revisarlo un abogado.
+-->
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Política de cookies — OmniaMentis</title>
+<meta name="description" content="Qué cookies usa OmniaMentis, para qué sirven y cómo borrarlas.">
+<link rel="stylesheet" href="legal.css">
+</head>
+<body>
+<a class="skip" href="#contenido">Saltar al contenido</a>
+<header class="top">
+  <a class="brand" href="../omnia_dashboard.html">OMNIA MENTIS</a>
+  <nav aria-label="Textos legales">
+    <ul class="nav">
+      <li><a href="privacidad.html">Privacidad</a></li>
+      <li><a href="terminos.html">Términos</a></li>
+      <li><a href="cookies.html" aria-current="page">Cookies</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main id="contenido">
+<h1>Política de cookies</h1>
+<p class="meta">Última actualización: 14 de octubre de 2026 · Versión 2026-10-14</p>
+
+<div class="callout" role="note">
+  <p><strong>En resumen.</strong> OmniaMentis usa <strong>una sola cookie, propia y necesaria</strong> para que Omnia te reconozca.
+  No usamos cookies de publicidad, de analítica ni de terceros, por eso no te mostramos un aviso para aceptarlas.</p>
+</div>
+
+<h2 id="que-son">1. Qué es una cookie</h2>
+<p>Una cookie es un pequeño archivo que el sitio guarda en tu navegador para recordar información entre visitas.</p>
+
+<h2 id="usamos">2. Qué cookies usamos</h2>
+<div class="table-wrap">
+<table>
+  <caption>Cookies de OmniaMentis</caption>
+  <thead>
+    <tr><th scope="col">Nombre</th><th scope="col">Tipo</th><th scope="col">Qué guarda y para qué</th><th scope="col">Duración</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th scope="row"><code>session</code></th>
+      <td>Propia, técnica y estrictamente necesaria.</td>
+      <td>Un identificador anónimo (o el de tu cuenta, si iniciaste sesión) y un número de versión de la sesión, firmados para que no se puedan alterar. Sirve para que Omnia mantenga tu progreso y tu memoria y para mantener tu sesión iniciada. Nunca contiene tu contraseña ni tus mensajes.</td>
+      <td>30 días desde tu última visita si no tienes cuenta; 365 días si iniciaste sesión en una cuenta.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<p><strong>Por qué dos duraciones.</strong> Para quien visita sin cuenta, la cookie dura 30 días desde su última visita (se renueva cada vez que vuelve). Para quien inició sesión en una cuenta, dura 365 días: es la credencial técnica necesaria para no tener que volver a iniciar sesión cada día. Al cerrar sesión, tu navegador la sustituye por una anónima.</p>
+<p>Características de seguridad: <code>HttpOnly</code> (los scripts de la página no pueden leerla), <code>SameSite=Lax</code> (no se envía en peticiones de otros sitios) y <code>Secure</code> cuando el servicio se sirve por HTTPS.</p>
+
+<h2 id="consentimiento">3. ¿Por qué no hay banner de cookies?</h2>
+<p>Las cookies estrictamente necesarias para prestar el servicio que tú solicitas no requieren consentimiento previo según la
+normativa de cookies de la Unión Europea (Directiva ePrivacy), y la ley de protección de datos de Ecuador exige informar de su
+uso, que es lo que hace esta página. Si en el futuro añadimos cookies que no sean necesarias (por ejemplo, de analítica), te
+pediremos consentimiento antes de activarlas y actualizaremos esta política.</p>
+
+<h2 id="terceros">4. Cookies y recursos de terceros</h2>
+<ul>
+  <li>No hay cookies de terceros, publicidad, redes sociales ni analíticas.</li>
+  <li>Las páginas no cargan fuentes, scripts ni imágenes de otros sitios.</li>
+  <li>Si usas el micrófono, el reconocimiento de voz lo gestiona tu navegador y puede enviar el audio a su proveedor; eso es ajeno a OmniaMentis (ver la <a href="privacidad.html#terceros">Política de privacidad</a>).</li>
+</ul>
+
+<h2 id="almacenamiento">5. Almacenamiento local del navegador</h2>
+<p>La interfaz de Omnia no guarda datos en el almacenamiento local de tu navegador (<code>localStorage</code> o
+<code>sessionStorage</code>). El panel interno de revisión del responsable sí usa almacenamiento de sesión para su propia
+autenticación y almacenamiento local para recordar la dirección de la API (no contiene datos personales); ese panel no está
+disponible para usuarios.</p>
+
+<h2 id="borrar">6. Cómo borrar o bloquear la cookie</h2>
+<p>Puedes borrar o bloquear las cookies desde los ajustes de tu navegador (en Chrome, Edge, Firefox y Safari, en «Privacidad» o
+«Cookies y datos del sitio»). Ten en cuenta que:</p>
+<ul>
+  <li>Si tienes cuenta, al borrarla simplemente tendrás que volver a iniciar sesión.</li>
+  <li>Si <strong>no</strong> tienes cuenta, al borrarla perderás el acceso a tu progreso y a tu memoria con Omnia, porque no habrá forma de reconocerte. Crear una cuenta antes de borrar la cookie lo evita.</li>
+  <li>Si la bloqueas, Omnia funcionará pero tratará cada mensaje como si vinieras por primera vez.</li>
+</ul>
+
+<h2 id="cambios">7. Cambios y contacto</h2>
+<p>Si cambia el uso de cookies, actualizaremos esta página y su fecha. Dudas: Stalin Benjamin Mera Saez ·
+<a href="mailto:contacto.omniamentis@gmail.com">contacto.omniamentis@gmail.com</a> · Quito, Ecuador.</p>
+</main>
+
+<footer class="foot">
+  <p>OmniaMentis © 2026 · <a href="privacidad.html">Privacidad</a> · <a href="terminos.html">Términos</a> · <a href="cookies.html">Cookies</a> · <a href="../omnia_dashboard.html">Volver a Omnia</a></p>
+</footer>
+</body>
+</html>

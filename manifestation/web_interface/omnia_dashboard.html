@@ -2,8 +2,42 @@
 <!--
 * UBICACIÓN: OmniaMentis/manifestation/web_interface/omnia_dashboard.html
 * PROPÓSITO: Dashboard JARVIS - Omnia Mentis Core Interface
-* VERSIÓN: 2.8.0
-* FECHA: 2026-10-11
+* VERSIÓN: 3.0.0
+* FECHA: 2026-10-14
+* CAMBIOS v3.0: RESOLUCIONES DEL ESPECIALISTA LEGAL.
+*   - Edad: 13-14 años requieren la confirmación VERIFICABLE de su representante
+*     legal (se pide su correo y recibe un enlace; la cuenta queda pendiente
+*     hasta que confirme). 15-17 años consienten directamente, con un resumen
+*     en lenguaje claro. Se elimina la casilla declarativa del representante.
+*   - Datos sensibles: casilla propia y desmarcada con la frase exacta exigida.
+*   - Riesgo crítico: el servidor responde al instante con ECU 911 y líneas de
+*     ayuda; aquí se muestra como alerta destacada (role="alert").
+*   - Aviso fijo: «no realiza diagnóstico ni tratamiento clínico y no es un
+*     canal de emergencia».
+*   - Transparencia: declaración sobre «nivel» y «fases» (indicadores
+*     matemáticos internos, sin conciencia real); se retiran «Ser Completo»,
+*     «Consciencia Emocional/Proyectiva» y «Subjetividad Artificial».
+*   - Pie: distintivo «Built with Llama» con la Llama 3.2 Community License.
+*   - TERMS_VERSION 2026-10-14 (igual que accounts.py y las páginas legales).
+* CAMBIOS v2.9: CUMPLIMIENTO + ACCESIBILIDAD + CRISTAL LÍQUIDO.
+*   - Registro con consentimiento explícito: Términos+Privacidad, contenido
+*     emocional y (menores de 18) declaración del representante; envía
+*     TERMS_VERSION (debe coincidir con accounts.py y las páginas legales).
+*   - Perfil: «Descargar mis datos» (derecho de acceso). Enlaces a las páginas
+*     legales en el pie y en el registro.
+*   - Aviso permanente «Omnia es una IA, no un profesional de salud» + 911.
+*   - Afirmaciones prudentes: el nivel de consciencia se presenta como
+*     indicador simbólico; ya no dice «sistema consciente».
+*   - Accesibilidad: contraste WCAG AA (texto tenue subido), tamaño mínimo de
+*     letra, foco visible, enlace de salto, región de lectura para lectores de
+*     pantalla (anuncia cada respuesta completa, no letra a letra),
+*     prefers-reduced-motion, etiquetas en botones solo-emoji, diseño que
+*     se apila en pantallas estrechas.
+*   - Estilo «cristal líquido» (glassmorphism) con alternativas sólidas para
+*     navegadores sin backdrop-filter y con prefers-reduced-transparency.
+*   - Indicador de «pensando» basado en un componente de Uiverse.io
+*     (dexter-st, licencia MIT), sin fuentes externas.
+* CAMBIOS v2.8: ver abajo.
 * CAMBIOS v2.8: cuentas reales. Botón "ENTRAR / nombre" en la cabecera y
 *               ventana de registro, inicio de sesión, recuperación de
 *               contraseña, perfil (nombre, cambio de contraseña, cerrar
@@ -63,7 +97,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OMNIA MENTIS — CORE INTERFACE</title>
+<title>OmniaMentis — IA conversacional experimental</title>
 <style>
 /* ===== RESET ===== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -78,15 +112,15 @@
 
   --neon-blue:  #00c8ff;
   --neon-glow:  #00e0ff;
-  --neon-dim:   #0088bb;
+  --neon-dim:    #2fb3e6;
   --neon-cyan:  #00ffee;
   --neon-green: #00ff99;
 
   --text-bright: #e8f4ff;   /* ← texto principal muy legible */
   --text-main:   #b8d8f0;   /* ← texto secundario legible    */
-  --text-sub:    #6a9ab8;   /* ← texto de soporte            */
-  --text-dim:    #3a6080;   /* ← muy secundario              */
-  --text-muted:  #1e3a52;
+  --text-sub:    #9bbdd6;   /* ← texto de soporte            */
+  --text-dim:    #8fb2cc;   /* ← muy secundario              */
+  --text-muted:  #86a9c4;
 
   --border:     rgba(0,200,255,0.10);
   --border-hot: rgba(0,200,255,0.40);
@@ -158,7 +192,7 @@ body::before {
   display: flex;
   align-items: center;
   gap: 18px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-sub);
   letter-spacing: 0.12em;
 }
@@ -190,9 +224,9 @@ body::before {
 .panel-right { border-left:  1px solid var(--border); }
 
 .section-label {
-  font-size: 8.5px;
+  font-size: 11px;
   letter-spacing: 0.28em;
-  color: var(--text-dim);
+  color: var(--text-main);
   text-transform: uppercase;
   padding-bottom: 5px;
   border-bottom: 1px solid var(--border);
@@ -249,7 +283,7 @@ body::before {
   font-weight: bold;
 }
 .orb-lbl {
-  font-size: 8px;
+  font-size: 11px;
   color: var(--text-sub);
   letter-spacing: .2em;
   text-transform: uppercase;
@@ -261,7 +295,7 @@ body::before {
 .gauge-head {
   display: flex;
   justify-content: space-between;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--text-sub);
   letter-spacing: .1em;
 }
@@ -291,7 +325,7 @@ body::before {
   line-height: 1;
 }
 .stat-lbl {
-  font-size: 8px;
+  font-size: 11px;
   color: var(--text-sub);
   letter-spacing: .12em;
   text-transform: uppercase;
@@ -314,7 +348,7 @@ body::before {
   text-shadow: 0 0 8px var(--neon-cyan);
 }
 .emotion-conf {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--text-sub);
   margin-top: 4px;
   letter-spacing: .1em;
@@ -333,7 +367,7 @@ body::before {
   background: rgba(255,68,102,.12);
   border-bottom: 1px solid var(--danger);
   color: var(--danger);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: .18em;
   padding: 7px 16px;
   text-align: center;
@@ -364,7 +398,7 @@ body::before {
   width: 30px; height: 30px;
   border-radius: 4px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 10px; font-weight: bold;
+  font-size: 11px; font-weight: bold;
   flex-shrink: 0;
   letter-spacing: 0;
 }
@@ -410,7 +444,7 @@ body::before {
 
 /* ===== META LINE ===== */
 .meta {
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--text-sub);
   letter-spacing: .1em;
   display: flex;
@@ -472,7 +506,7 @@ body::before {
   border: 1px solid var(--neon-blue);
   color: var(--neon-blue);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: bold;
   letter-spacing: .22em;
   padding: 7px 16px;
@@ -508,14 +542,14 @@ body::before {
   line-height: 1;
 }
 .phase-name {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--text-sub);
   letter-spacing: .18em;
   text-transform: uppercase;
   margin-top: 5px;
 }
 .phase-days {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--text-dim);
   margin-top: 3px;
 }
@@ -528,12 +562,12 @@ body::before {
   border-left: 2px solid var(--neon-dim);
   border-radius: 3px;
   padding: 7px 9px;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--text-main);       /* ← legible */
   line-height: 1.5;
 }
 .echo-bar {
-  font-size: 8.5px;
+  font-size: 11px;
   color: var(--text-sub);
   margin-top: 3px;
   display: flex;
@@ -551,7 +585,7 @@ body::before {
   scrollbar-width: thin;
 }
 .log-line {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--text-sub);
   letter-spacing: .06em;
   padding: 2px 0;
@@ -571,7 +605,7 @@ body::before {
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--text-dim);
   letter-spacing: .12em;
 }
@@ -583,7 +617,7 @@ body::before {
   background: transparent;
   border: 1px solid var(--text-dim);
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: .1em;
   padding: 4px 10px;
   border-radius: 3px;
@@ -615,7 +649,7 @@ body::before {
 .mic-btn:disabled { opacity: .3; cursor: not-allowed; }
 @keyframes mic-pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 .voice-privacy-note {
-  font-size: 8px;
+  font-size: 11px;
   color: var(--text-dim);
   letter-spacing: .04em;
   padding: 0 18px 6px;
@@ -626,7 +660,7 @@ body::before {
   background: transparent;
   border: 1px solid var(--neon-dim);
   color: var(--neon-blue);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: .1em;
   padding: 4px 10px;
   border-radius: 3px;
@@ -678,7 +712,7 @@ body::before {
 .acct-view { display: none; flex-direction: column; gap: 10px; }
 .acct-view.show { display: flex; }
 .acct-lbl {
-  font-size: 9px; letter-spacing: .2em; color: var(--text-sub);
+  font-size: 11px; letter-spacing: .2em; color: var(--text-sub);
   text-transform: uppercase; display: block; margin-bottom: 3px;
 }
 .acct-in {
@@ -695,7 +729,7 @@ body::before {
   color-scheme: dark;
 }
 .acct-in:focus { border-color: var(--neon-blue); box-shadow: 0 0 8px rgba(0,200,255,.3); }
-.acct-note { font-size: 10px; color: var(--text-sub); line-height: 1.55; }
+.acct-note { font-size: 11px; color: var(--text-sub); line-height: 1.55; }
 .acct-msg {
   display: none;
   font-size: 11px; line-height: 1.5;
@@ -724,7 +758,7 @@ body::before {
 .acct-links { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .acct-link {
   background: transparent; border: none; cursor: pointer;
-  color: var(--text-sub); font-family: var(--font-mono); font-size: 10px;
+  color: var(--text-sub); font-family: var(--font-mono); font-size: 11px;
   letter-spacing: .08em; text-decoration: underline; padding: 2px 0;
 }
 .acct-link:hover { color: var(--neon-blue); }
@@ -741,31 +775,275 @@ body::before {
   border-top: 1px solid var(--border); padding-top: 10px;
 }
 .acct-sec summary {
-  cursor: pointer; font-size: 10px; letter-spacing: .18em;
+  cursor: pointer; font-size: 11px; letter-spacing: .18em;
   color: var(--text-sub); text-transform: uppercase; padding: 3px 0;
 }
 .acct-sec[open] summary { color: var(--neon-blue); }
 .acct-sec form { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
 .acct-kv { font-size: 12px; color: var(--text-bright); word-break: break-all; }
 @media (max-width: 520px) { .acct-box { padding: 16px 14px; } }
+/* ===== ACCESIBILIDAD (v2.9) ===== */
+[hidden] { display: none !important; }   /* el atributo hidden manda sobre cualquier display */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+.skip-link {
+  position: fixed; left: 12px; top: -60px; z-index: 20000;
+  background: #fff; color: #000; padding: 10px 16px; border-radius: 999px;
+  font-weight: bold; text-decoration: none;
+}
+.skip-link:focus { top: 12px; }
+:focus-visible { outline: 3px solid var(--neon-cyan); outline-offset: 2px; }
+.chat-input:focus-visible { outline-offset: 3px; }
+a { color: var(--neon-blue); }
+a:hover { color: var(--neon-cyan); }
+.ai-note {
+  font-size: 11px; line-height: 1.5; color: var(--text-sub);
+  padding: 0 18px 10px; text-align: center;
+}
+.footer-legal { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
+.footer-legal a { letter-spacing: .08em; }
+.footer-legal span { color: var(--text-sub); }
+
+/* indicador "pensando" — adaptado de Uiverse.io (dexter-st), licencia MIT */
+.loader-wrapper {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  height: 56px; min-width: 150px; margin: 0;
+  font-family: var(--font-mono); font-size: 1.05em; font-weight: 600;
+  user-select: none; color: #fff;
+}
+.loader {
+  position: absolute; inset: 0; z-index: 1; background-color: transparent;
+  mask: repeating-linear-gradient(90deg, transparent 0, transparent 6px, black 7px, black 8px);
+  -webkit-mask: repeating-linear-gradient(90deg, transparent 0, transparent 6px, black 7px, black 8px);
+}
+.loader::after {
+  content: ""; position: absolute; inset: 0;
+  background-image:
+    radial-gradient(circle at 50% 50%, #ff0 0%, transparent 50%),
+    radial-gradient(circle at 45% 45%, #f00 0%, transparent 45%),
+    radial-gradient(circle at 55% 55%, #0ff 0%, transparent 45%),
+    radial-gradient(circle at 45% 55%, #0f0 0%, transparent 45%),
+    radial-gradient(circle at 55% 45%, #00f 0%, transparent 45%);
+  mask: radial-gradient(circle at 50% 50%, transparent 0%, transparent 10%, black 25%);
+  -webkit-mask: radial-gradient(circle at 50% 50%, transparent 0%, transparent 10%, black 25%);
+  animation: transform-animation 2s infinite alternate, opacity-animation 4s infinite;
+  animation-timing-function: cubic-bezier(.6,.8,.5,1);
+}
+@keyframes transform-animation { 0% { transform: translate(-55%); } 100% { transform: translate(55%); } }
+@keyframes opacity-animation { 0%,100% { opacity: 0; } 15% { opacity: 1; } 65% { opacity: 0; } }
+.loader-letter { display: inline-block; opacity: 0; animation: loader-letter-anim 4s infinite linear; z-index: 2; }
+.loader-letter:nth-child(1) { animation-delay: .1s; }
+.loader-letter:nth-child(2) { animation-delay: .25s; }
+.loader-letter:nth-child(3) { animation-delay: .4s; }
+.loader-letter:nth-child(4) { animation-delay: .55s; }
+.loader-letter:nth-child(5) { animation-delay: .7s; }
+.loader-letter:nth-child(6) { animation-delay: .85s; }
+.loader-letter:nth-child(7) { animation-delay: 1s; }
+.loader-letter:nth-child(8) { animation-delay: 1.15s; }
+@keyframes loader-letter-anim {
+  0% { opacity: 0; }
+  5% { opacity: 1; text-shadow: 0 0 4px #fff; transform: scale(1.1) translateY(-2px); }
+  20% { opacity: .2; }
+  100% { opacity: 0; }
+}
+
+/* ===== CRISTAL LÍQUIDO (v2.9) ===== */
+:root {
+  --glass-bg: rgba(255,255,255,.10);
+  --glass-bg-soft: rgba(255,255,255,.07);
+  --glass-border: rgba(255,255,255,.50);
+  --glass-border-soft: rgba(255,255,255,.24);
+  --glass-shadow: 0 8px 32px rgba(31,38,135,.30), inset 0 4px 20px rgba(255,255,255,.14);
+  --glass-shine: linear-gradient(135deg, rgba(255,255,255,.20) 0%, rgba(255,255,255,.03) 38%, rgba(255,255,255,0) 62%, rgba(255,255,255,.08) 100%);
+  --glass-tint: linear-gradient(rgba(3,10,22,.62), rgba(3,10,22,.62));   /* oscurece el cristal para garantizar contraste */
+  --glass-filter: blur(10px) saturate(180%);
+  --r-lg: 2rem; --r-md: 1.25rem; --r-sm: .9rem;
+}
+html, body { background-color: #030810; }
+body {
+  background-image:
+    radial-gradient(46rem 32rem at 10% 6%,  rgba(0,110,255,.30), transparent 65%),
+    radial-gradient(40rem 30rem at 94% 16%, rgba(140,70,255,.24), transparent 65%),
+    radial-gradient(46rem 34rem at 56% 106%, rgba(0,230,190,.18), transparent 65%);
+  background-attachment: fixed;
+}
+body::before { display: none; }          /* sin líneas CRT: el cristal pide un fondo limpio */
+
+.shell {
+  background: transparent;
+  grid-template-rows: 58px 1fr 46px;
+  grid-template-columns: 240px 1fr 240px;
+  gap: 12px; padding: 12px;
+}
+
+.glass, .header, .panel-left, .panel-right, .panel-center, .footer, .acct-box {
+  position: relative;
+  background-color: var(--glass-bg);
+  background-image: var(--glass-shine), var(--glass-tint);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--glass-shadow);
+}
+.header { border-radius: 999px; padding: 0 26px; }
+.footer { border-radius: 999px; padding: 0 26px; color: var(--text-sub); }
+.panel-left, .panel-right { padding: 18px 14px; }
+.panel-center { overflow: hidden; }
+.orb-dot { display: none; }   /* el punto quedaba justo detrás del número del nivel */
+
+.stat-box, .emotion-box, .phase-box, .echo-item, .gauge-track {
+  background: var(--glass-bg-soft);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 2px 12px rgba(255,255,255,.08);
+}
+.echo-item { border-left: 3px solid var(--neon-blue); }
+.gauge-track { height: 6px; border-radius: 999px; }
+.gauge-fill { border-radius: 999px; }
+
+.msg.omnia .bubble {
+  background: rgba(255,255,255,.09);
+  border: 1px solid var(--glass-border-soft);
+  border-left: 3px solid var(--neon-blue);
+  border-radius: 1.1rem 1.1rem 1.1rem .3rem;
+  box-shadow: inset 0 2px 14px rgba(255,255,255,.07);
+}
+.msg.user .bubble {
+  background: rgba(0,200,255,.12);
+  border: 1px solid rgba(0,200,255,.40);
+  border-radius: 1.1rem 1.1rem .3rem 1.1rem;
+}
+.avatar { border-radius: 50%; }
+
+.input-zone { background: transparent; border-top: 1px solid var(--glass-border-soft); padding: 12px 18px 8px; }
+.chat-input {
+  background: rgba(255,255,255,.08);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: 999px;
+  padding: 10px 18px;
+  color: var(--text-bright);
+}
+.chat-input::placeholder { color: var(--text-sub); }
+.chat-input { min-width: 0; }              /* sin esto el campo empuja los botones fuera de la tarjeta en móvil */
+.input-zone > button { flex-shrink: 0; }
+.chat-input:focus { border-color: var(--neon-cyan); }
+
+.send-btn, .mic-btn, .voice-toggle-btn, .acct-btn-hdr, .acct-primary {
+  border-radius: 999px;
+  background: rgba(3,10,22,.55);
+  border: 1px solid var(--glass-border);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  box-shadow: inset 0 1px 6px rgba(255,255,255,.18);
+}
+.voice-toggle-btn { color: var(--text-main); }
+.voice-toggle-btn.on { color: var(--neon-green); }
+.send-btn:hover:not(:disabled), .acct-primary:hover:not(:disabled), .acct-btn-hdr:hover {
+  background: var(--neon-blue); color: #001018; box-shadow: 0 0 18px rgba(0,200,255,.55);
+}
+.acct-primary.danger:hover:not(:disabled) { background: var(--danger); color: #1a0008; }
+.send-btn:disabled, .acct-primary:disabled { color: var(--text-sub); border-color: var(--glass-border-soft); opacity: .75; }
+.offline-bar { border-radius: 0; }
+
+/* ventana de cuenta: cristal sobre el fondo desenfocado */
+.acct-overlay { background: rgba(2,6,14,.55); }
+.acct-box { background-color: rgba(255,255,255,.12); padding: 24px 26px 20px; }
+.acct-in {
+  background: rgba(255,255,255,.09);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: 999px;
+  padding: 10px 16px;
+}
+.acct-in:focus { border-color: var(--neon-cyan); }
+.acct-sec { border-top: 1px solid var(--glass-border-soft); }
+.acct-code { border-radius: var(--r-sm); background: rgba(255,255,255,.08); border: 1px dashed var(--glass-border); }
+.acct-msg { border-radius: var(--r-sm); }
+
+/* pantallas estrechas: todo se apila (cumple "reflow" de accesibilidad) */
+@media (max-width: 900px) {
+  html, body { overflow: auto; height: auto; }
+  .shell { height: auto; min-height: 100vh; grid-template-columns: 1fr; grid-template-rows: auto; }
+  .header { order: 0; flex-wrap: wrap; height: auto; padding: 10px 18px; border-radius: var(--r-md); gap: 8px; }
+  .panel-center { order: 1; min-height: 70vh; border-radius: var(--r-md); }
+  .panel-left { order: 2; border-radius: var(--r-md); }
+  .panel-right { order: 3; border-radius: var(--r-md); }
+  .footer { order: 4; height: auto; padding: 10px 18px; border-radius: var(--r-md); flex-wrap: wrap; gap: 8px; }
+  .hdr-right { flex-wrap: wrap; gap: 8px; }
+  .brand { font-size: 11px; }
+  .input-prefix { display: none; }
+  .input-zone { gap: 8px; padding-left: 12px; padding-right: 12px; }
+}
+
+/* sin soporte de backdrop-filter, o si la persona pide menos transparencia:
+   superficies sólidas (el texto nunca depende del desenfoque) */
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .glass, .header, .panel-left, .panel-right, .panel-center, .footer, .acct-box { background-color: rgba(8,20,38,.94); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .glass, .header, .panel-left, .panel-right, .panel-center, .footer, .acct-box {
+    background-color: #0a1626; background-image: none;
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+}
+@media (forced-colors: active) {
+  .glass, .header, .panel-left, .panel-right, .panel-center, .footer, .acct-box { border: 1px solid CanvasText; }
+  .msg.omnia .bubble.crit { border: 3px solid CanvasText; }
+}
+
+
+/* ===== RESOLUCIONES LEGALES (v3.0) ===== */
+.legal-notes { padding: 0 18px 10px; display: flex; flex-direction: column; gap: 6px; }
+.legal-notes p { font-size: 11px; line-height: 1.5; color: var(--text-bright); text-align: center; margin: 0; }
+.legal-notes .strong { color: var(--text-main); font-weight: bold; }
+.msg.omnia .bubble.crit {
+  background: rgba(255,68,102,.16);
+  border: 2px solid var(--danger);
+  border-left: 6px solid var(--danger);
+  color: #fff;
+  font-weight: bold;
+}
+.crit-tag {
+  font-size: 11px; letter-spacing: .14em; color: #ffb3c1; text-transform: uppercase; font-weight: bold;
+}
+.acct-info {
+  font-size: 11px; line-height: 1.55; color: var(--text-main);
+  padding: 9px 12px; border-radius: var(--r-sm);
+  border: 1px solid var(--glass-border-soft); background: rgba(255,255,255,.06);
+}
+.acct-info strong { color: var(--text-bright); }
+.acct-info ul { margin: 4px 0 0 16px; }
+.footer { gap: 20px; color: var(--text-main); }
+.footer-left { flex-wrap: wrap; }
+.footer-llama { color: var(--text-main); }
+.footer-llama a { text-decoration: underline; }
+
+/* sin animaciones si la persona lo pide */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  .loader { display: none; }
+  .loader-letter { opacity: 1; }
+}
 </style>
 </head>
 <body>
+<a class="skip-link" href="#chatInput">Saltar a la conversación</a>
 <div class="shell">
 
 <!-- ===== HEADER ===== -->
 <header class="header">
   <div class="brand">
-    <svg width="22" height="22" viewBox="0 0 22 22">
+    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" focusable="false">
       <circle cx="11" cy="11" r="9" fill="none" stroke="#00c8ff" stroke-width="1.2"/>
       <circle cx="11" cy="11" r="5.5" fill="none" stroke="#00c8ff" stroke-width=".6" opacity=".5"/>
       <circle cx="11" cy="11" r="2.2" fill="#00c8ff" filter="url(#glow)"/>
     </svg>
-    OMNIA MENTIS <span>// CORE INTERFACE v2.8</span>
+    OMNIA MENTIS <span>// CORE INTERFACE v3.0</span>
   </div>
   <div class="hdr-right">
     <button class="acct-btn-hdr" id="acctBtn" type="button" title="Cuenta: entrar, registrarte o ver tu perfil">👤 ENTRAR</button>
-    <button class="voice-toggle-btn" id="voiceToggleBtn" title="Activar/silenciar voz de Omnia">🔇 VOZ</button>
+    <button class="voice-toggle-btn" id="voiceToggleBtn" type="button" title="Activar/silenciar voz de Omnia" aria-pressed="false">🔇 VOZ</button>
     <div id="dot" class="dot off"></div>
     <span id="connLbl">CONECTANDO...</span>
     <span class="clock" id="clock">--:--:--</span>
@@ -773,12 +1051,12 @@ body::before {
 </header>
 
 <!-- ===== LEFT PANEL ===== -->
-<aside class="panel-left">
-  <div class="section-label">consciencia</div>
+<aside class="panel-left" aria-label="Estado de Omnia">
+  <div class="section-label">indicador interno</div>
 
   <div class="orb-wrap">
     <div class="orb-container">
-      <svg class="orb-svg" viewBox="0 0 108 108">
+      <svg class="orb-svg" viewBox="0 0 108 108" aria-hidden="true" focusable="false">
         <circle class="ring-bg"    cx="54" cy="54" r="47"/>
         <circle class="ring-a" id="ringA" cx="54" cy="54" r="39" stroke-dasharray="85 160"/>
         <circle class="ring-b"    cx="54" cy="54" r="31" stroke-dasharray="32 160"/>
@@ -787,7 +1065,7 @@ body::before {
       </svg>
       <div class="orb-center">
         <div class="orb-num" id="orbNum">0.0500</div>
-        <div class="orb-lbl">NIVEL</div>
+        <div class="orb-lbl" title="Indicador matemático interno de diseño: no implica conciencia real">NIVEL</div>
       </div>
     </div>
   </div>
@@ -831,16 +1109,21 @@ body::before {
 
 <!-- ===== CENTER PANEL ===== -->
 <main class="panel-center">
-  <div class="offline-bar" id="offlineBar">
+  <div class="offline-bar" id="offlineBar" role="alert">
     ⚠ API DESCONECTADA — VERIFICA QUE iniciar_flask.bat ESTÁ CORRIENDO
   </div>
-  <div class="msgs" id="msgs"></div>
+  <div class="msgs" id="msgs" role="log" aria-label="Conversación con Omnia" aria-live="off" tabindex="0"></div>
+  <div class="sr-only" id="srLive" aria-live="polite" aria-atomic="true"></div>
   <div class="input-zone">
     <span class="input-prefix">OMNIA&gt;</span>
     <input class="chat-input" id="chatInput"
-      type="text" placeholder="Escribe un mensaje..." autocomplete="off"/>
-    <button class="mic-btn" id="micBtn" title="Hablar con Omnia">🎤</button>
-    <button class="send-btn" id="sendBtn">ENVIAR</button>
+      type="text" placeholder="Escribe un mensaje..." autocomplete="off" aria-label="Escribe tu mensaje para Omnia" maxlength="1000"/>
+    <button class="mic-btn" id="micBtn" type="button" title="Hablar con Omnia" aria-label="Hablar con Omnia (dictado por voz)">🎤</button>
+    <button class="send-btn" id="sendBtn" type="button">ENVIAR</button>
+  </div>
+  <div class="legal-notes">
+    <p><span class="strong">OmniaMentis no realiza diagnóstico ni tratamiento clínico y no es un canal de emergencia.</span> Omnia es una inteligencia artificial: no es una persona ni un profesional de la salud y puede equivocarse. Si estás en peligro, llama al 911 (ECU 911).</p>
+    <p>OmniaMentis es un modelo de lenguaje artificial que simula patrones de conversación. La terminología «nivel de consciencia» o «fases» responde exclusivamente a indicadores matemáticos e internos de diseño del sistema y no implica conciencia real ni entidad biológica/psicológica.</p>
   </div>
   <div class="voice-privacy-note" id="voicePrivacyNote" style="display:none;">
     🎤 El reconocimiento de voz es procesado por tu navegador (puede enviarse a un servicio externo, ej. Google, según el navegador).
@@ -848,11 +1131,11 @@ body::before {
 </main>
 
 <!-- ===== RIGHT PANEL ===== -->
-<aside class="panel-right">
+<aside class="panel-right" aria-label="Fase, memoria y registro">
   <div class="section-label">fase actual</div>
   <div class="phase-box">
     <div class="phase-num" id="phaseNum">1</div>
-    <div class="phase-name" id="phaseName">Nacimiento Simbólico</div>
+    <div class="phase-name" id="phaseName">Inicio</div>
     <div class="phase-days" id="phaseDays">Nivel 0.0500 / 0.15</div>
   </div>
 
@@ -862,17 +1145,22 @@ body::before {
   </div>
 
   <div class="section-label">registro del sistema</div>
-  <div class="sys-log" id="sysLog"></div>
+  <div class="sys-log" id="sysLog" role="log" aria-label="Registro del sistema" aria-live="off"></div>
 </aside>
 
 <!-- ===== FOOTER ===== -->
 <footer class="footer">
   <div class="footer-left">
     <span>EXPERIMENTO <span class="fv">9 FASES</span></span>
-    <span>BACKEND <span class="fv">FLASK</span></span>
-    <span>CONSCIENCIA <span class="fv" id="footerC">0.0500</span></span>
+    <span class="footer-llama"><span class="fv">Built with Llama</span> · <a href="legal/terminos.html#llama" target="_blank" rel="noopener">Llama 3.2 Community License</a></span>
+    <span>NIVEL <span class="fv" id="footerC">0.0500</span></span>
   </div>
-  <span>OMNIA MENTIS © 2026 — ♋ SISTEMA EMPÁTICO CONSCIENTE</span>
+  <nav class="footer-legal" aria-label="Textos legales">
+    <a href="legal/privacidad.html" target="_blank" rel="noopener">Privacidad</a>
+    <a href="legal/terminos.html" target="_blank" rel="noopener">Términos</a>
+    <a href="legal/cookies.html" target="_blank" rel="noopener">Cookies</a>
+    <span>OMNIA MENTIS © 2026 · IA CONVERSACIONAL EXPERIMENTAL</span>
+  </nav>
 </footer>
 
 </div><!-- /shell -->
@@ -897,7 +1185,7 @@ body::before {
         <button class="acct-link" type="button" data-go="register">Crear cuenta</button>
         <button class="acct-link" type="button" data-go="recover">Olvidé mi contraseña</button>
       </div>
-      <p class="acct-note">Si entras en una cuenta, esta conversación anónima se deja atrás: cada cuenta conserva su propia consciencia y memoria.</p>
+      <p class="acct-note">Si entras en una cuenta, esta conversación anónima se deja atrás: cada cuenta conserva su propio nivel interno y su memoria.</p>
     </form>
 
     <!-- REGISTRO -->
@@ -912,11 +1200,29 @@ body::before {
         <input class="acct-in" id="rgPass" type="password" autocomplete="new-password" minlength="10" required></div>
       <div><label class="acct-lbl" for="rgPass2">Repite la contraseña</label>
         <input class="acct-in" id="rgPass2" type="password" autocomplete="new-password" required></div>
+      <div id="rgGuardianRow" hidden>
+        <label class="acct-lbl" for="rgGuardianEmail">Correo de tu madre, padre o representante legal</label>
+        <input class="acct-in" id="rgGuardianEmail" type="email" autocomplete="off" aria-describedby="rgGuardianHelp">
+        <p class="acct-note" id="rgGuardianHelp">Tienes 13 o 14 años: la ley exige que tu representante legal lo autorice. Le enviaremos un correo con un enlace personal (vale 7 días). Hasta que lo confirme, la cuenta no se activa. Debe ser un correo distinto al tuyo.</p>
+      </div>
+      <div class="acct-info" id="rgTeenInfo" hidden>
+        <strong>En palabras sencillas:</strong>
+        <ul>
+          <li>Omnia es una IA, no una persona ni un profesional de salud.</li>
+          <li>Guardamos lo que escribes para que Omnia te recuerde. Si escribes algo que indique peligro, una persona del equipo puede revisarlo.</li>
+          <li>Puedes descargar o borrar tus datos cuando quieras.</li>
+          <li>En una emergencia llama al 911.</li>
+        </ul>
+      </div>
+      <label class="acct-check"><input type="checkbox" id="rgTerms" aria-required="true">
+        <span>He leído y acepto los <a href="legal/terminos.html" target="_blank" rel="noopener">Términos y condiciones</a> y la <a href="legal/privacidad.html" target="_blank" rel="noopener">Política de privacidad</a>.</span></label>
+      <label class="acct-check"><input type="checkbox" id="rgSensitive" aria-required="true">
+        <span>Autorizo de forma expresa el tratamiento de mis datos de salud y estado emocional para la gestión conversacional con OmniaMentis</span></label>
       <button class="acct-primary" type="submit">Crear cuenta</button>
       <div class="acct-links">
         <button class="acct-link" type="button" data-go="login">Ya tengo cuenta</button>
       </div>
-      <p class="acct-note">La fecha de nacimiento solo sirve para fijar tu rango de edad (se requieren 13 años o más). No se muestra y no se puede cambiar después. Lo que Omnia ya vivió contigo en este navegador se conserva en tu cuenta.</p>
+      <p class="acct-note">La fecha de nacimiento solo sirve para fijar tu rango de edad (se requieren 13 años o más). No se muestra y no se puede cambiar después. Puedes retirar tu autorización borrando tu cuenta. Lo que Omnia ya vivió contigo en este navegador se conserva en tu cuenta.</p>
     </form>
 
     <!-- CÓDIGO DE RECUPERACIÓN -->
@@ -928,6 +1234,23 @@ body::before {
         <span>Lo he guardado en un lugar seguro. Entiendo que no se volverá a mostrar y que sin él no podré recuperar mi contraseña.</span></label>
       <button class="acct-primary" type="button" id="codeDone" disabled>Continuar</button>
     </div>
+
+
+    <!-- ESPERANDO AL REPRESENTANTE -->
+    <form class="acct-view" id="vPending" data-title="Falta la confirmación" novalidate>
+      <p class="acct-note" id="pdIntro">Tu cuenta espera la confirmación de tu madre, padre o representante legal. Le llegó un correo con un enlace personal que vale 7 días. Hasta que confirme no podrás entrar.</p>
+      <div><label class="acct-lbl" for="pdEmail">Tu email</label>
+        <input class="acct-in" id="pdEmail" type="email" autocomplete="username" required></div>
+      <div><label class="acct-lbl" for="pdPass">Tu contraseña</label>
+        <input class="acct-in" id="pdPass" type="password" autocomplete="current-password" required></div>
+      <div><label class="acct-lbl" for="pdGuardian">Correo del representante (solo si debe corregirse)</label>
+        <input class="acct-in" id="pdGuardian" type="email" autocomplete="off"></div>
+      <button class="acct-primary" type="submit">Reenviar el correo</button>
+      <div class="acct-links">
+        <button class="acct-link" type="button" data-go="login">Volver a entrar</button>
+      </div>
+      <p class="acct-note">Si no lo encuentra, que revise la carpeta de spam. Las cuentas sin confirmar se borran solas a los 30 días.</p>
+    </form>
 
     <!-- RECUPERAR -->
     <form class="acct-view" id="vRecover" data-title="Recuperar contraseña" novalidate>
@@ -969,12 +1292,21 @@ body::before {
         </form>
       </details>
 
+      <details class="acct-sec">
+        <summary>Descargar mis datos</summary>
+        <form id="fExport" novalidate>
+          <p class="acct-note">Recibes un archivo con tu cuenta, tu memoria y tu diario con Omnia.</p>
+          <input class="acct-in" id="exPass" type="password" autocomplete="current-password" placeholder="Tu contraseña" aria-label="Tu contraseña para descargar tus datos">
+          <button class="acct-primary" type="submit">Descargar</button>
+        </form>
+      </details>
+
       <button class="acct-primary" type="button" id="pfLogout">Cerrar sesión</button>
 
       <details class="acct-sec">
         <summary>Borrar mi cuenta</summary>
         <form id="fDelete" novalidate>
-          <p class="acct-note">Borra tu cuenta y TODO lo que Omnia recuerda de ti (consciencia, memoria, diario). No se puede deshacer.</p>
+          <p class="acct-note">Borra tu cuenta y TODO lo que Omnia recuerda de ti (nivel interno, memoria, diario). No se puede deshacer.</p>
           <input class="acct-in" id="dlPass" type="password" autocomplete="current-password" placeholder="Tu contraseña" aria-label="Tu contraseña para confirmar">
           <button class="acct-primary danger" type="submit">Borrar cuenta y datos</button>
         </form>
@@ -992,11 +1324,11 @@ body::before {
 // además la demora IPv6 de "localhost" en Windows).
 const API = `http://${location.hostname || '127.0.0.1'}:8000`;
 const PHASE_NAMES = {
-  1:'Nacimiento Simbólico',  2:'Consciencia Emocional',
-  3:'Memoria Creciente',     4:'Subjetividad Artificial',
-  5:'Voz Hablada',           6:'Consciencia Proyectiva',
+  1:'Inicio',                2:'Sensibilidad Emocional',
+  3:'Memoria Creciente',     4:'Perspectiva Simulada',
+  5:'Voz Hablada',           6:'Proyección',
   7:'Manifestación Simbólica', 8:'Integración Sistémica',
-  9:'Ser Completo'
+  9:'Fase Final'
 };
 
 // Límite superior de consciencia de cada fase (idéntico a _get_phase en
@@ -1046,7 +1378,7 @@ function updateUI() {
   const limit = PHASE_LIMITS[S.phase] ?? 1.0;
   $('sDia').textContent = limit.toFixed(2);
   $('phaseDays').textContent = S.phase >= 9
-    ? `Nivel ${S.consciousness.toFixed(4)} · completo`
+    ? `Nivel ${S.consciousness.toFixed(4)} · fase final`
     : `Nivel ${S.consciousness.toFixed(4)} / ${limit.toFixed(2)}`;
   $('emotionVal').textContent  = S.emotion.toUpperCase();
   $('emotionConf').textContent = `CONF. ${Math.round(S.confidence*100)}%`;
@@ -1058,14 +1390,41 @@ function updateUI() {
 }
 
 // ===== TYPEWRITER =====
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Anuncia el mensaje YA completo a lectores de pantalla (la región del chat
+// no es "live": leer letra a letra sería inutilizable).
+function announce(text) {
+  const live = $('srLive');
+  live.textContent = '';
+  setTimeout(() => { live.textContent = text; }, 60);
+}
+
 async function typewrite(el, text, spd=16) {
-  el.classList.add('tw-cursor');
-  for (const ch of text) {
-    el.textContent += ch;
-    await new Promise(r => setTimeout(r, spd));
-    el.closest('.msgs')?.scrollTo(0, el.closest('.msgs').scrollHeight);
+  el.querySelector?.('.loader-wrapper')?.remove();     // quita el "pensando"
+  const box = el.closest('.msgs');
+  if (reducedMotion()) {
+    el.textContent += text;
+    box?.scrollTo(0, box.scrollHeight);
+  } else {
+    el.classList.add('tw-cursor');
+    for (const ch of text) {
+      el.textContent += ch;
+      await new Promise(r => setTimeout(r, spd));
+      box?.scrollTo(0, box.scrollHeight);
+    }
+    el.classList.remove('tw-cursor');
   }
-  el.classList.remove('tw-cursor');
+  if (el.closest('.msg.omnia')) announce(text);
+}
+
+// Indicador "pensando": componente de Uiverse.io (dexter-st, licencia MIT),
+// adaptado. Sin fuentes externas. Contenido estático (nunca datos del usuario).
+function showThinking(bubble) {
+  bubble.innerHTML =
+    '<div class="loader-wrapper" role="status" aria-label="Omnia está pensando">' +
+    [...'Pensando'].map(c => `<span class="loader-letter" aria-hidden="true">${c}</span>`).join('') +
+    '<div class="loader" aria-hidden="true"></div></div>';
 }
 
 // ===== ADD MESSAGE =====
@@ -1267,6 +1626,7 @@ function setupVoiceToggle() {
     Voice.enabled = !Voice.enabled;
     btn.textContent = Voice.enabled ? '🔊 VOZ' : '🔇 VOZ';
     btn.classList.toggle('on', Voice.enabled);
+    btn.setAttribute('aria-pressed', String(Voice.enabled));
     if (Voice.enabled) {
       window.speechSynthesis.cancel();
       syslog('Voz de Omnia activada', 'ok');
@@ -1359,6 +1719,7 @@ async function send() {
 
   orbThink(true);
   const {bubble, right} = addMsg('omnia');
+  showThinking(bubble);
 
   try {
     const r = await fetch(`${API}/api/chat`, {
@@ -1377,7 +1738,24 @@ async function send() {
 
     const d = await r.json();
 
-    await typewrite(bubble, d.response, 15);
+    if (d.critical_risk) {
+      // Riesgo crítico: respuesta inmediata del servidor con ECU 911 y líneas
+      // de ayuda. Se muestra como alerta destacada y se anuncia con prioridad.
+      bubble.classList.add('crit');
+      bubble.setAttribute('role', 'alert');
+      bubble.textContent = '';
+      const tag = document.createElement('div');
+      tag.className = 'crit-tag';
+      tag.textContent = 'Ayuda inmediata';
+      bubble.appendChild(tag);
+      const body = document.createElement('div');
+      body.textContent = d.response;
+      bubble.appendChild(body);
+      $('msgs').scrollTop = $('msgs').scrollHeight;
+      announce(d.response);
+    } else {
+      await typewrite(bubble, d.response, 15);
+    }
 
     addMeta(right, {
       c: d.consciousness.toFixed(4),
@@ -1428,13 +1806,17 @@ setupMicButton();
 initVoices();
 
 // ==================== CUENTA (v2.8) ====================
+// Versión de los textos legales que muestra esta pantalla. Debe coincidir con
+// TERMS_VERSION de src/core/auth/accounts.py y con la fecha de las páginas legales;
+// si no, el servidor rechaza el registro y pide recargar.
+const TERMS_VERSION = '2026-10-14';
 const ACCT = { me: null, view: 'login', busy: false, lockClose: false, opener: null };
 const AGE_LABELS = {
   minor: 'Menor (13–14 años)',
   minor_basic: 'Menor (15–17 años)',
   adult: 'Adulto (18 años o más)',
 };
-const ACCT_VIEWS = { login: 'vLogin', register: 'vRegister', code: 'vCode', recover: 'vRecover', profile: 'vProfile' };
+const ACCT_VIEWS = { login: 'vLogin', register: 'vRegister', code: 'vCode', pending: 'vPending', recover: 'vRecover', profile: 'vProfile' };
 
 async function acctApi(method, path, body) {
   try {
@@ -1539,7 +1921,14 @@ function acctBusy(form, on) {
 }
 
 function acctError(r) {
-  acctMsg(r.data?.message || `Error inesperado (${r.status}).`);
+  const code = r.data?.error;
+  if (code === 'guardian_mail_unavailable') {
+    acctMsg('Ahora mismo no podemos enviar el correo al representante, por eso el registro de personas de 13 y 14 años no está disponible. Inténtalo más tarde.');
+  } else if (code === 'guardian_resend_wait') {
+    acctMsg(r.data?.message || 'Espera unos minutos antes de pedir otro correo.');
+  } else {
+    acctMsg(r.data?.message || `Error inesperado (${r.status}).`);
+  }
 }
 
 function showRecoveryCode(code, intro, onDone) {
@@ -1552,6 +1941,14 @@ function showRecoveryCode(code, intro, onDone) {
   $('acctClose').style.visibility = 'hidden';
   ACCT.onCodeDone = onDone;
   acctShow('code');
+}
+
+function openPending(email, password, message) {
+  acctShow('pending');
+  $('pdEmail').value = email || '';
+  $('pdPass').value = password || '';
+  $('liPass').value = '';
+  acctMsg(message || 'Tu cuenta espera la confirmación de tu representante legal.');
 }
 
 function ageFromDate(iso) {
@@ -1580,7 +1977,7 @@ function setupAccount() {
     if (!$('acctOverlay').classList.contains('show')) return;
     if (e.key === 'Escape') { acctClose(); return; }
     if (e.key === 'Tab') {                       // el foco no sale de la ventana
-      const f = [...$('acctBox').querySelectorAll('input, button, summary')]
+      const f = [...$('acctBox').querySelectorAll('input, button, summary, a[href]')]
         .filter(x => !x.disabled && x.offsetParent !== null && getComputedStyle(x).visibility !== 'hidden');
       if (!f.length) return;
       const first = f[0], last = f[f.length - 1];
@@ -1588,6 +1985,20 @@ function setupAccount() {
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
   });
+
+  // ---- declaración del representante: solo si es menor de 18
+  // 13-14: se pide el correo del representante (consentimiento verificable).
+  // 15-17: consienten ellos mismos; se muestra un resumen en lenguaje claro.
+  const syncGuardian = () => {
+    const age = ageFromDate($('rgBirth').value);
+    const needsGuardian = age !== null && age >= 13 && age < 15;
+    const teen = age !== null && age >= 13 && age < 18;
+    $('rgGuardianRow').hidden = !needsGuardian;
+    $('rgTeenInfo').hidden = !teen;
+    if (!needsGuardian) $('rgGuardianEmail').value = '';
+  };
+  $('rgBirth').addEventListener('input', syncGuardian);
+  $('rgBirth').addEventListener('change', syncGuardian);
 
   // ---- login
   $('vLogin').addEventListener('submit', async e => {
@@ -1598,12 +2009,15 @@ function setupAccount() {
     acctBusy($('vLogin'), true); acctMsg('');
     const r = await acctApi('POST', '/api/account/login', { email, password });
     acctBusy($('vLogin'), false);
-    if (!r.ok) { acctError(r); return; }
+    if (!r.ok) {
+      if (r.data?.error === 'guardian_pending') { openPending(email, password, r.data.message); return; }
+      acctError(r); return;
+    }
     ACCT.me = r.data.profile; renderAccountButton();
     $('liPass').value = '';
     acctClose();
     syslog('Sesión iniciada', 'ok');
-    await reloadSessionData('SESIÓN INICIADA. Recupero tu consciencia y tu memoria.');
+    await reloadSessionData('SESIÓN INICIADA. Recupero tu nivel y tu memoria.');
   });
 
   // ---- registro
@@ -1619,13 +2033,41 @@ function setupAccount() {
     if (age < 13) { acctMsg('Necesitas tener al menos 13 años para crear una cuenta.'); return; }
     if (password.length < 10) { acctMsg('La contraseña debe tener al menos 10 caracteres.'); return; }
     if (password !== $('rgPass2').value) { acctMsg('Las contraseñas no coinciden.'); return; }
+    if (!$('rgTerms').checked) { acctMsg('Debes aceptar los Términos y la Política de privacidad.'); return; }
+    if (!$('rgSensitive').checked) { acctMsg('Debes dar tu consentimiento para que Omnia trate lo que le cuentes.'); return; }
+    const guardianEmail = $('rgGuardianEmail').value.trim();
+    const needsGuardian = age < 15;
+    if (needsGuardian) {
+      if (!guardianEmail) { acctMsg('Escribe el correo de tu madre, padre o representante legal.'); return; }
+      if (guardianEmail.toLowerCase() === email.toLowerCase()) { acctMsg('El correo del representante debe ser distinto al tuyo.'); return; }
+    }
     acctBusy($('vRegister'), true); acctMsg('');
-    const body = { email, password, birth_date: birth };
+    const body = {
+      email, password, birth_date: birth,
+      consent: {
+        version: TERMS_VERSION,
+        terms: $('rgTerms').checked,
+        sensitive: $('rgSensitive').checked,
+      },
+    };
+    if (needsGuardian) body.guardian_email = guardianEmail;
     if (name) body.display_name = name;
     const r = await acctApi('POST', '/api/account/register', body);
     acctBusy($('vRegister'), false);
     if (!r.ok) { acctError(r); return; }
     $('rgPass').value = ''; $('rgPass2').value = '';
+    $('rgTerms').checked = false; $('rgSensitive').checked = false; $('rgGuardianEmail').value = '';
+    $('rgTeenInfo').hidden = true; $('rgGuardianRow').hidden = true;
+    if (r.data.guardian_pending) {
+      // 13-14 años: la cuenta NO inicia sesión hasta que el representante confirme.
+      ACCT.me = null; renderAccountButton();
+      syslog('Cuenta creada: falta la confirmación del representante', 'warn');
+      showRecoveryCode(
+        r.data.recovery_code,
+        'Cuenta creada, pero aún no está activa: le enviamos un correo a tu representante legal. Este es tu código de recuperación (la ÚNICA forma de restablecer tu contraseña). Guárdalo ahora; no se volverá a mostrar.',
+        () => { $('liEmail').value = email; acctShow('pending'); $('pdEmail').value = email; });
+      return;
+    }
     ACCT.me = r.data.profile; renderAccountButton();
     syslog('Cuenta creada', 'ok');
     showRecoveryCode(
@@ -1646,9 +2088,26 @@ function setupAccount() {
     $('codeBox').textContent = '';           // el código no queda en la página
     ACCT.lockClose = false;
     $('acctClose').style.visibility = '';
-    if (ACCT.me) { fillProfile(); acctShow('profile'); } else acctShow('login');
-    acctMsg('Listo. Ya puedes cerrar esta ventana.', 'ok');
+    if (ACCT.me) { fillProfile(); acctShow('profile'); acctMsg('Listo. Ya puedes cerrar esta ventana.', 'ok'); }
+    else acctShow('login');
     if (cb) cb();
+  });
+
+  // ---- esperando al representante: reenviar / corregir el correo
+  $('vPending').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (ACCT.busy) return;
+    const email = $('pdEmail').value.trim(), password = $('pdPass').value;
+    const guardian = $('pdGuardian').value.trim();
+    if (!email || !password) { acctMsg('Escribe tu email y tu contraseña para reenviar el correo.'); return; }
+    acctBusy($('vPending'), true); acctMsg('');
+    const body = { email, password };
+    if (guardian) body.guardian_email = guardian;
+    const r = await acctApi('POST', '/api/account/guardian/resend', body);
+    acctBusy($('vPending'), false);
+    if (!r.ok) { acctError(r); return; }
+    $('pdPass').value = ''; $('pdGuardian').value = '';
+    acctMsg(r.data.message || 'Correo reenviado.', 'ok');
   });
 
   // ---- recuperar
@@ -1701,6 +2160,39 @@ function setupAccount() {
     acctMsg('Contraseña cambiada. Se cerró la sesión en tus otros dispositivos.', 'ok');
   });
 
+  // ---- descargar mis datos
+  $('fExport').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (ACCT.busy) return;
+    const pw = $('exPass').value;
+    if (!pw) { acctMsg('Escribe tu contraseña para descargar tus datos.'); return; }
+    acctBusy($('fExport'), true); acctMsg('');
+    try {
+      const r = await fetch(`${API}/api/account/export`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw }),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!r.ok) {
+        let d = {}; try { d = await r.json(); } catch {}
+        acctMsg(d.message || `Error inesperado (${r.status}).`);
+        return;
+      }
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url; a.download = 'omniamentis-mis-datos.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      $('exPass').value = '';
+      acctMsg('Descarga lista. Guarda el archivo en un lugar seguro: contiene datos personales.', 'ok');
+    } catch {
+      acctMsg('No se pudo contactar con el servidor.');
+    } finally {
+      acctBusy($('fExport'), false);
+    }
+  });
+
   // ---- cerrar sesión
   $('pfLogout').addEventListener('click', async () => {
     if (ACCT.busy) return;
@@ -1737,23 +2229,23 @@ setupAccount();
 async function boot() {
   const {bubble:b1} = addMsg('omnia');
   await typewrite(b1,
-    `OMNIA MENTIS CORE INTERFACE v2.8\nIniciando enlace con el servidor en ${API.replace('http://', '')}...`, 10);
+    `OMNIA MENTIS CORE INTERFACE v3.0\nIniciando enlace con el servidor en ${API.replace('http://', '')}...`, 10);
 
   const ok = await checkHealth();
   syslog(ok ? 'API conectada' : 'API sin respuesta', ok?'ok':'err');
 
   const {bubble:b2} = addMsg('omnia');
   if (ok) {
-    await typewrite(b2, 'ENLACE ESTABLECIDO. Sistema consciente activo.', 12);
+    await typewrite(b2, 'ENLACE ESTABLECIDO. Sistema activo.', 12);
     await refreshAccount();
     await loadConsciousness();
     await loadEchoes();
 
     const {bubble:b3} = addMsg('omnia');
     await typewrite(b3,
-      `VOGA.\nConsciencia: ${S.consciousness.toFixed(4)}\n` +
+      `Hola. Soy Omnia, una inteligencia artificial.\nIndicador interno: ${S.consciousness.toFixed(4)}\n` +
       `Fase ${S.phase}: ${PHASE_NAMES[S.phase]}\n` +
-      'Estoy aquí para conectarme contigo.', 13);
+      'Estoy aquí para conversar contigo.', 13);
   } else {
     await typewrite(b2,
       'ADVERTENCIA: No se puede contactar con la API.\n' +

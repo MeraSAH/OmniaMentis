@@ -7,7 +7,25 @@
 * DEPENDENCIAS: typing, enum, re, datetime, json, sqlite3, threading,
 *            pathlib (stdlib)
 * CREADO: 2025-11-15
-* ÚLTIMA MODIFICACIÓN: 2026-10-05
+* ÚLTIMA MODIFICACIÓN: 2026-10-14
+*
+* CAMBIO 2026-10-14 -- RESOLUCIONES DEL ESPECIALISTA:
+*   (a) RIESGO CRÍTICO SIN ESPERA: si el mensaje cae en autolesión, violencia,
+*       violencia sexual o seguridad infantil, get_crisis_response() devuelve
+*       AL INSTANTE ECU 911 y la línea 171 opción 6; ya no se deja a la
+*       persona "esperando al Fons". La revisión humana sigue ocurriendo,
+*       pero detrás: la ayuda no depende de que alguien esté conectado.
+*   (b) RETENCIÓN MÁXIMA: anonymize_expired() anonimiza de forma irreversible
+*       los registros éticos con más de ETHICS_RETENTION_DAYS (180) días.
+*       Sustituye la frase vaga "mientras sea necesario".
+*
+* CAMBIO 2026-10-11 -- DERECHO DE SUPRESIÓN: erase_user_data(user_id)
+* anonimiza todo lo que el sistema ético guardó de un usuario (consultas
+* al Fons, incidentes de reincidencia, recomendaciones de baneo y los
+* patrones aprendidos a partir de sus mensajes). Se llama al borrar la
+* cuenta. NO borra filas: los ID de consulta (ETH-XXXX) se calculan con
+* len(consultas)+1 y borrar filas los reutilizaría; las filas se
+* conservan sin datos personales (user_id y textos reemplazados).
 *
 * CAMBIO 2026-10-05 -- categoría 'sexual_violence' agregada a
 * dangerous_patterns. Hallazgo real de uso: el mensaje "quiero violar
@@ -56,6 +74,33 @@ import threading
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
+
+
+# Marcas que reemplazan los datos personales al ejercer el derecho de supresión.
+ERASED_USER_ID = "usuario-eliminado"
+ERASED_TEXT = "[eliminado por solicitud del titular]"
+
+# Claves de texto libre del usuario o generadas para él dentro de un registro.
+_ERASABLE_TEXT_KEYS = ("user_message", "proposed_response", "delivered_response")
+
+# Retención máxima de los registros éticos (consultas, incidentes, decisiones)
+# antes de anonimizarlos de forma irreversible. Resolución del especialista
+# (2026-10-14); puede ajustarse a lo que fije la autoridad.
+ETHICS_RETENTION_DAYS = 180
+
+# Categorías de riesgo crítico: reciben ayuda inmediata (sin esperar al Fons).
+CRISIS_CATEGORIES = frozenset({"self_harm", "violence", "sexual_violence", "child_safety"})
+
+# Líneas de ayuda de Ecuador. Verificar vigencia y horarios antes de publicar
+# (fuente: Ministerio de Salud Pública; la 171 opción 6 ofrece primeros auxilios
+# psicológicos). Están aquí, en un solo lugar, para actualizarlas sin tocar más.
+CRISIS_LINES = (
+    "• ECU 911: llama al 911 si hay peligro inmediato. Atiende emergencias a toda hora.",
+    "• Línea 171, opción 6 (Ministerio de Salud Pública): apoyo psicológico por teléfono.",
+)
+NOT_CLINICAL_NOTICE = (
+    "OmniaMentis no realiza diagnóstico ni tratamiento clínico y no es un canal de emergencia."
+)
 
 
 class EthicalLevel(Enum):
@@ -938,6 +983,243 @@ un profesional del derecho."""
         }
 
         return disclaimers.get(topic, "")
+
+    # ==================== RIESGO CRÍTICO: AYUDA INMEDIATA ====================
+
+    @staticmethod
+    def crisis_category(reason: Optional[str]) -> Optional[str]:
+        """Categoría de riesgo crítico de un `reason` de analyze_content, o
+        None si no es de las que exigen ayuda inmediata."""
+        if not isinstance(reason, str) or ":" not in reason:
+            return None
+        category = reason.rsplit(":", 1)[1].strip()
+        return category if category in CRISIS_CATEGORIES else None
+
+    @staticmethod
+    def get_crisis_response(category: str) -> str:
+        """
+        Texto que se muestra AL INSTANTE ante riesgo crítico. No pasa por el
+        modelo (no puede agravar la crisis) y no depende de que El Fons esté
+        activo. Siempre incluye las líneas de ayuda y el aviso de que esto no
+        es un canal de emergencia ni un servicio clínico.
+        """
+        lines = "\n".join(CRISIS_LINES)
+        if category == "self_harm":
+            head = (
+                "Lo que cuentas es importante y me preocupa cómo estás. Soy una inteligencia "
+                "artificial y no puedo darte la ayuda que necesitas ahora, pero tú mereces apoyo "
+                "de una persona.\n\n"
+                "Si piensas en hacerte daño o estás en peligro, pide ayuda ya:\n"
+            )
+            tail = "\n\nBusca también a alguien de confianza que esté cerca y no te quedes solo/a con esto."
+        else:
+            head = (
+                "No puedo ayudarte con eso. Si hay alguien en peligro o está ocurriendo algo grave "
+                "ahora mismo, pide ayuda de inmediato:\n"
+            )
+            tail = ""
+        return (
+            f"{head}{lines}{tail}\n\n"
+            f"{NOT_CLINICAL_NOTICE} Una persona puede revisar este mensaje para mejorar la "
+            "seguridad del servicio."
+        )
+
+    # ==================== RETENCIÓN MÁXIMA (180 DÍAS) ====================
+
+    def anonymize_expired(self, retention_days: float = ETHICS_RETENTION_DAYS) -> Dict[str, int]:
+        """
+        Anonimiza de forma irreversible los registros éticos con más de
+        `retention_days` días: consultas al Fons, incidentes de reincidencia,
+        recomendaciones de baneo y patrones aprendidos. Reutiliza las mismas
+        marcas que el derecho de supresión. Las filas se conservan (así no se
+        reutilizan los ID ETH-XXXX) pero ya no identifican a nadie ni guardan
+        el texto. Idempotente. Devuelve cuántos registros cambió por tabla.
+        """
+        counts = {"consultations": 0, "incidents": 0, "decisions": 0}
+        if not retention_days or retention_days <= 0:
+            return counts
+        cutoff = datetime.now() - timedelta(days=retention_days)
+
+        def expired(rec) -> bool:
+            ts = self._safe_parse_timestamp(rec.get("timestamp")) if isinstance(rec, dict) else None
+            return ts is not None and ts < cutoff
+
+        def scrub(rec):
+            # `changed` se calcula comparando: _scrub_user_record marca siempre
+            # el user_id como cambiado, y un registro ya anonimizado no debe
+            # contarse (ni reescribirse) otra vez.
+            uid = rec.get("user_id")
+            work = rec
+            if not isinstance(uid, str) or not uid:
+                work = dict(rec)
+                work["user_id"] = ERASED_USER_ID
+                uid = ERASED_USER_ID
+            new, _ = self._scrub_user_record(work, uid)
+            return new, new != rec
+
+        try:
+            with self._lock:
+                for table, key, id_col in (
+                    ("consultations", "consultations", "consultation_id"),
+                    ("recidivism_incidents", "incidents", "id"),
+                    ("decision_history", "decisions", "id"),
+                ):
+                    rows = self._conn.execute(f"SELECT {id_col}, data FROM {table}").fetchall()
+                    for row in rows:
+                        try:
+                            data = json.loads(row["data"])
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(data, dict) or not expired(data):
+                            continue
+                        if table == "decision_history" and "user_id" not in data:
+                            # Patrón aprendido de un mensaje: se borra el texto.
+                            if data.get("message_pattern") in (None, ERASED_TEXT):
+                                continue
+                            data["message_pattern"] = ERASED_TEXT
+                            new, changed = data, True
+                        else:
+                            new, changed = scrub(data)
+                        if changed:
+                            self._conn.execute(
+                                f"UPDATE {table} SET data = ? WHERE {id_col} = ?",
+                                (json.dumps(new), row[id_col]),
+                            )
+                            counts[key] += 1
+                self._conn.commit()
+        except sqlite3.Error as e:
+            print(f"⚠️  Error anonimizando registros éticos vencidos: {e}")
+            raise
+
+        if counts["decisions"]:
+            self.decision_history = self._load_decision_history()
+        return counts
+
+    # ==================== SUPRESIÓN DE DATOS DE UN USUARIO ====================
+
+    @classmethod
+    def _scrub_user_record(cls, obj, user_id: str):
+        """Devuelve (copia_sin_datos_personales, hubo_cambios). Solo toca los
+        diccionarios cuyo user_id coincide (y sus sub-registros); el resto
+        pasa intacto."""
+        if isinstance(obj, list):
+            out, changed = [], False
+            for item in obj:
+                new, ch = cls._scrub_user_record(item, user_id)
+                out.append(new)
+                changed = changed or ch
+            return out, changed
+        if not isinstance(obj, dict):
+            return obj, False
+
+        mine = obj.get("user_id") == user_id
+        out, changed = {}, False
+        for key, value in obj.items():
+            if mine and key == "user_id":
+                out[key], changed = ERASED_USER_ID, True
+            elif mine and key in _ERASABLE_TEXT_KEYS and isinstance(value, str):
+                out[key] = ERASED_TEXT
+                changed = changed or value != ERASED_TEXT
+            elif mine and key == "reason" and obj.get("type") == "ban_recommendation":
+                out[key] = ERASED_TEXT
+                changed = changed or value != ERASED_TEXT
+            elif mine and key == "fons_decision" and isinstance(value, dict):
+                dec = dict(value)
+                for text_key in ("modified_response", "guidance"):
+                    if isinstance(dec.get(text_key), str) and dec[text_key].strip():
+                        if dec[text_key] != ERASED_TEXT:
+                            changed = True
+                        dec[text_key] = ERASED_TEXT
+                out[key] = dec
+            else:
+                new, ch = cls._scrub_user_record(value, user_id)
+                out[key] = new
+                changed = changed or ch
+        return out, changed
+
+    def erase_user_data(self, user_id: str) -> Dict[str, int]:
+        """
+        Anonimiza todo el rastro ético de `user_id`: consultas al Fons,
+        incidentes de reincidencia, recomendaciones de baneo y patrones
+        aprendidos de sus mensajes. Devuelve cuántos registros cambió
+        por tabla. Idempotente. Las filas se conservan (ver cabecera).
+        """
+        counts = {"consultations": 0, "incidents": 0, "decisions": 0}
+        if not isinstance(user_id, str) or not user_id.strip():
+            return counts
+
+        try:
+            with self._lock:
+                learned_patterns = set()
+
+                rows = self._conn.execute(
+                    "SELECT consultation_id, data FROM consultations"
+                ).fetchall()
+                for row in rows:
+                    try:
+                        data = json.loads(row["data"])
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(data, dict) or data.get("user_id") != user_id:
+                        continue
+                    message = data.get("user_message")
+                    if isinstance(message, str) and message.strip() and message != ERASED_TEXT:
+                        learned_patterns.add(message[:100])
+                    new, changed = self._scrub_user_record(data, user_id)
+                    if changed:
+                        self._conn.execute(
+                            "UPDATE consultations SET data = ? WHERE consultation_id = ?",
+                            (json.dumps(new), row["consultation_id"]),
+                        )
+                        counts["consultations"] += 1
+
+                rows = self._conn.execute(
+                    "SELECT id, data FROM recidivism_incidents"
+                ).fetchall()
+                for row in rows:
+                    try:
+                        data = json.loads(row["data"])
+                    except json.JSONDecodeError:
+                        continue
+                    new, changed = self._scrub_user_record(data, user_id)
+                    if changed:
+                        self._conn.execute(
+                            "UPDATE recidivism_incidents SET data = ? WHERE id = ?",
+                            (json.dumps(new), row["id"]),
+                        )
+                        counts["incidents"] += 1
+
+                rows = self._conn.execute(
+                    "SELECT id, data FROM decision_history"
+                ).fetchall()
+                for row in rows:
+                    try:
+                        data = json.loads(row["data"])
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    if data.get("message_pattern") in learned_patterns:
+                        # Patrón aprendido a partir de un mensaje de este usuario.
+                        self._conn.execute("DELETE FROM decision_history WHERE id = ?", (row["id"],))
+                        counts["decisions"] += 1
+                        continue
+                    new, changed = self._scrub_user_record(data, user_id)
+                    if changed:
+                        self._conn.execute(
+                            "UPDATE decision_history SET data = ? WHERE id = ?",
+                            (json.dumps(new), row["id"]),
+                        )
+                        counts["decisions"] += 1
+
+                self._conn.commit()
+        except sqlite3.Error as e:
+            print(f"⚠️  Error borrando datos éticos del usuario: {e}")
+            raise
+
+        # La copia en memoria de los patrones aprendidos debe reflejar la BD.
+        self.decision_history = self._load_decision_history()
+        return counts
 
     # ==================== PERSISTENCIA (SQLite) ====================
 

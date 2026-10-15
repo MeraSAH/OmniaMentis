@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<!--
+* UBICACIÓN: OmniaMentis/manifestation/web_interface/representante.html
+* PROPÓSITO: Página a la que llega la madre, el padre o el representante legal
+*            de una persona de 13-14 años desde el enlace de su correo, para
+*            confirmar (o no) la cuenta. Consentimiento verificable (Art. 25
+*            LOPDP, según la resolución del especialista legal 2026-10-14).
+* VERSIÓN: 1.0.0   FECHA: 2026-10-14
+* DECISIONES
+*   - El token viaja en el FRAGMENTO de la URL (#t=...): el navegador no lo
+*     envía en la petición HTTP, así que no queda en logs de servidores. Se
+*     lee una vez y se quita de la barra de direcciones.
+*   - Doble casilla: (1) Términos y Privacidad; (2) autorización expresa sobre
+*     datos de salud y estado emocional EN NOMBRE de la persona menor.
+*   - Sin localStorage/cookies: la página no guarda nada.
+*   - Todo texto del servidor se pinta con textContent.
+*   - TERMS_VERSION debe coincidir con accounts.py y las páginas legales.
+-->
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Autorización del representante — OmniaMentis</title>
+<meta name="description" content="Confirma como madre, padre o representante legal la cuenta de una persona de 13 o 14 años en OmniaMentis.">
+<link rel="stylesheet" href="legal/legal.css">
+<style>
+  .form { display: flex; flex-direction: column; gap: 1rem; margin-top: 1.25rem; }
+  .check { display: flex; gap: .7rem; align-items: flex-start; padding: .8rem 1rem;
+           background: var(--panel); border: 1px solid var(--border); border-radius: 1rem; }
+  .check input { margin-top: .4rem; width: 1.15rem; height: 1.15rem; flex-shrink: 0; accent-color: var(--accent); }
+  .check label { cursor: pointer; }
+  .btn { font: inherit; font-weight: 700; padding: .8rem 1.4rem; border-radius: 999px; cursor: pointer;
+         border: 2px solid var(--accent); background: var(--accent); color: #001018; }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .btn.secondary { background: transparent; color: var(--text); border-color: var(--border); }
+  .status { padding: .9rem 1.1rem; border-radius: 1.1rem; border: 1px solid var(--border);
+            border-left-width: 6px; background: var(--panel); }
+  .status.ok { border-color: #1f9d55; }
+  .status.err { border-color: #c0392b; }
+  .status[hidden], .form[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<a class="skip" href="#contenido">Saltar al contenido</a>
+<header class="top">
+  <a class="brand" href="omnia_dashboard.html">OMNIA MENTIS</a>
+  <nav aria-label="Textos legales">
+    <ul class="nav">
+      <li><a href="legal/privacidad.html" target="_blank" rel="noopener">Privacidad</a></li>
+      <li><a href="legal/terminos.html" target="_blank" rel="noopener">Términos</a></li>
+      <li><a href="legal/cookies.html" target="_blank" rel="noopener">Cookies</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main id="contenido">
+<h1>Autorización de madre, padre o representante legal</h1>
+<p class="meta">Versión de los textos: 2026-10-14</p>
+
+<div id="status" class="status" role="status" aria-live="polite" hidden></div>
+
+<section id="info">
+  <p>Una persona de <strong>13 o 14 años</strong> quiere crear una cuenta en OmniaMentis, una inteligencia artificial conversacional
+  experimental. En Ecuador, a esa edad el consentimiento para tratar sus datos personales debe darlo su representante legal. Tú
+  recibiste este enlace porque se indicó tu correo para hacerlo.</p>
+
+  <h2 id="que-autorizas">Qué autorizas</h2>
+  <ul>
+    <li>Que se cree la cuenta y se guarde lo necesario para que funcione: correo, nombre opcional, rango de edad y la memoria que Omnia construye con la conversación.</li>
+    <li>Que se traten <strong>datos de salud y de estado emocional</strong> que la persona menor decida contarle a Omnia (tristeza, duelo, ansiedad, etc.).</li>
+    <li>Que los mensajes que toquen temas de riesgo puedan ser revisados por una persona del equipo (lo explica la política de privacidad). Si el sistema detecta un riesgo crítico, muestra de inmediato el ECU 911 y la línea de ayuda 171, opción 6.</li>
+  </ul>
+  <div class="callout" role="note">
+    <p><strong>OmniaMentis no realiza diagnóstico ni tratamiento clínico y no es un canal de emergencia.</strong> No sustituye a un profesional de la salud.
+    En una emergencia llama al 911.</p>
+  </div>
+  <p>Puedes retirar esta autorización en cualquier momento escribiendo a
+  <a href="mailto:contacto.omniamentis@gmail.com">contacto.omniamentis@gmail.com</a>; la cuenta y sus datos se borran. La persona menor también puede borrarla desde su perfil.
+  Si no reconoces esta solicitud, no hagas nada: la cuenta no se activará y se borrará sola.</p>
+  <p>Lee los textos completos: <a href="legal/privacidad.html" target="_blank" rel="noopener">Política de privacidad</a> y
+  <a href="legal/terminos.html" target="_blank" rel="noopener">Términos y condiciones</a> (se abren en otra pestaña).</p>
+</section>
+
+<form id="form" class="form" novalidate>
+  <div class="check">
+    <input type="checkbox" id="cTerms" aria-required="true">
+    <label for="cTerms">Soy la madre, el padre o el representante legal de la persona menor. He leído y acepto los
+      <a href="legal/terminos.html" target="_blank" rel="noopener">Términos y condiciones</a> y la
+      <a href="legal/privacidad.html" target="_blank" rel="noopener">Política de privacidad</a>, y autorizo que cree su cuenta.</label>
+  </div>
+  <div class="check">
+    <input type="checkbox" id="cSensitive" aria-required="true">
+    <label for="cSensitive">En nombre de la persona menor, autorizo de forma expresa el tratamiento de sus datos de salud y estado
+      emocional para la gestión conversacional con OmniaMentis.</label>
+  </div>
+  <button class="btn" id="btn" type="submit">Confirmar autorización</button>
+</form>
+</main>
+
+<footer class="foot">
+  <p>OmniaMentis © 2026 · <a href="legal/privacidad.html">Privacidad</a> · <a href="legal/terminos.html">Términos</a> · <a href="legal/cookies.html">Cookies</a> · <a href="omnia_dashboard.html">Ir a Omnia</a></p>
+  <p>Built with Llama · <a href="legal/terminos.html#llama">Llama 3.2 Community License</a></p>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+  // Debe coincidir con TERMS_VERSION de accounts.py y con las páginas legales.
+  var TERMS_VERSION = '2026-10-14';
+  // La API usa el mismo host con el que se abrió la página (ver omnia_dashboard.html).
+  var API = 'http://' + (location.hostname || '127.0.0.1') + ':8000';
+  var $ = function (id) { return document.getElementById(id); };
+
+  // Lee el token del fragmento y lo quita de la barra de direcciones.
+  var token = '';
+  var m = /(?:^#|&)t=([A-Za-z0-9_-]{20,128})(?:&|$)/.exec(location.hash || '');
+  if (m) token = m[1];
+  try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+
+  function status(text, kind) {
+    var el = $('status');
+    el.textContent = text;
+    el.className = 'status' + (kind ? ' ' + kind : '');
+    el.hidden = false;
+  }
+
+  if (!token) {
+    $('form').hidden = true;
+    $('info').hidden = true;
+    status('El enlace no es válido o está incompleto. Abre el enlace completo que llegó a tu correo. ' +
+           'Si ya venció (dura 7 días) o ya se usó, la persona menor puede pedir que se envíe otro desde OmniaMentis.', 'err');
+    return;
+  }
+
+  var busy = false;
+  $('form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (busy) return;
+    if (!$('cTerms').checked) { status('Marca la primera casilla para continuar.', 'err'); $('cTerms').focus(); return; }
+    if (!$('cSensitive').checked) { status('Marca la segunda casilla (datos de salud y estado emocional) para continuar.', 'err'); $('cSensitive').focus(); return; }
+    busy = true; $('btn').disabled = true;
+    status('Enviando…');
+
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, 20000);
+    fetch(API + '/api/account/guardian/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token: token,
+        consent: { version: TERMS_VERSION, terms: true, sensitive: true }
+      }),
+      signal: ctrl.signal
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (data) { return { ok: r.ok, status: r.status, data: data }; });
+    }).then(function (res) {
+      if (res.ok) {
+        token = '';
+        $('form').hidden = true;
+        $('info').hidden = true;
+        status('Listo. Autorización registrada: la cuenta ya puede iniciar sesión. Gracias. ' +
+               'Puedes cerrar esta página.', 'ok');
+        return;
+      }
+      busy = false; $('btn').disabled = false;
+      var msg = (res.data && res.data.message) || ('Error inesperado (' + res.status + ').');
+      if (res.data && res.data.error === 'guardian_token_invalid') {
+        $('form').hidden = true;
+        if (!/[.!?]$/.test(msg)) msg += '.';
+        msg += ' Si necesitas un enlace nuevo, la persona menor puede pedirlo desde OmniaMentis al intentar entrar.';
+      }
+      status(msg, 'err');
+    }).catch(function () {
+      busy = false; $('btn').disabled = false;
+      status('No se pudo contactar con el servidor. Revisa tu conexión e inténtalo de nuevo.', 'err');
+    }).then(function () { clearTimeout(timer); });
+  });
+})();
+</script>
+</body>
+</html>
