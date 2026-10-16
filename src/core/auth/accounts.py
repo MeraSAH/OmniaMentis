@@ -7,7 +7,7 @@
 *            cuenta de usuario concede acceso al Fons.
 * DEPENDENCIAS: stdlib únicamente (hashlib, hmac, sqlite3, secrets...)
 * CREADO: 2026-10-10
-* ÚLTIMA MODIFICACIÓN: 2026-10-14
+* ÚLTIMA MODIFICACIÓN: 2026-10-15
 * ESTADO: Producción
 *
 * DECISIONES DE DISEÑO
@@ -114,7 +114,7 @@ DISPLAY_NAME_MAX = 40
 
 # Versión de los textos legales (privacidad, términos, cookies). Súbela cada
 # vez que cambien de fondo; coincide con la fecha de "Última actualización".
-TERMS_VERSION = "2026-10-14"
+TERMS_VERSION = "2026-10-15"
 
 # Confirmación del representante legal (13-14 años).
 GUARDIAN_TOKEN_TTL_SECONDS = 7 * 86400          # el enlace vence a los 7 días

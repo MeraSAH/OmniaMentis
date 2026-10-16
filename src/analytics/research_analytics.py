@@ -217,13 +217,19 @@ class ResearchAnalytics:
 
         return self.session_id
 
-    def log_interaction(self, user_input: str, omnia_response: str) -> None:
+    def log_interaction(
+        self, user_input: str, omnia_response: str, store_text: bool = False
+    ) -> None:
         """
         Registra una interacción con análisis automático de complejidad
 
         Args:
             user_input: Mensaje del usuario (máx 500 chars)
             omnia_response: Respuesta de Omnia (máx 1000 chars)
+            store_text: si es False (por defecto) NO se guarda ningún texto,
+                solo métricas (longitud y complejidad, calculadas sobre la
+                respuesta real). Los mensajes de las personas son datos
+                personales: solo guardarlos con consentimiento expreso.
 
         Raises:
             RuntimeError: Si no hay sesión activa
@@ -254,8 +260,8 @@ class ResearchAnalytics:
         interaction_log = InteractionLog(
             interaction_id=f"{self.session_id}_int_{self.interaction_count:03d}",
             timestamp=datetime.now().isoformat(),
-            user_input=user_input[:500],  # Limitar longitud para evitar overflow
-            omnia_response=omnia_response[:1000],
+            user_input=user_input[:500] if store_text else "",
+            omnia_response=omnia_response[:1000] if store_text else "",
             length=len(omnia_response),
             complexity=self._calculate_complexity(omnia_response),
         )

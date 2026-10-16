@@ -236,19 +236,31 @@ class TestRegister:
         assert set(profile) == {"user_id", "email", "display_name", "age_band", "created_at",
                                 "guardian_pending"}
 
-    def test_account_reuses_the_anonymous_user_id(self, client):
-        chat(client)
-        anon_id = session_user_id(client)
+    def test_account_reuses_a_legacy_anonymous_user_id(self, client):
+        # Cookie anónima de versiones anteriores: su uuid (y su memoria) pasan a la cuenta.
+        with client.session_transaction() as s:
+            s["user_id"] = "11111111-2222-4333-8444-555555555555"
         profile = register(client).get_json()["profile"]
-        assert profile["user_id"] == anon_id
-        assert session_user_id(client) == anon_id
+        assert profile["user_id"] == "11111111-2222-4333-8444-555555555555"
+        assert session_user_id(client) == profile["user_id"]
 
-    def test_consciousness_earned_before_registering_is_kept(self, client):
+    def test_account_gets_a_fresh_id_when_there_is_no_cookie(self, client):
+        profile = register(client).get_json()["profile"]
+        assert len(profile["user_id"]) == 36 and session_user_id(client) == profile["user_id"]
+
+    def test_failed_registration_leaves_no_cookie(self, client):
+        r = register(client, password="corta")
+        assert r.status_code == 400
+        assert not [h for h in r.headers.getlist("Set-Cookie") if h.startswith("session=")]
+
+    def test_consciousness_is_kept_across_logout_and_login(self, client):
+        assert register(client).status_code == 201
         for _ in range(3):
             chat(client)
         before = consciousness(client)
         assert before > 0.05
-        assert register(client).status_code == 201
+        client.post("/api/account/logout")
+        assert login(client).status_code == 200
         assert consciousness(client) == before
 
     def test_consciousness_survives_logout_and_login(self, client):
@@ -576,7 +588,8 @@ class TestProfile:
         chat(client)
         assert ollama.calls[-1]["user_stated_name"] == "Ana"
 
-    def test_anonymous_user_has_no_profile_name(self, client, ollama):
+    def test_account_without_name_sends_no_profile_name(self, client, ollama):
+        assert register(client, display_name=None).status_code == 201
         chat(client)
         assert ollama.calls[-1]["user_stated_name"] is None
 
@@ -619,7 +632,7 @@ class TestChangePassword:
         assert a.get("/api/account/me").get_json()["logged_in"] is True
         assert b.get("/api/account/me").get_json()["logged_in"] is False
 
-    def test_invalidated_browser_chats_as_a_new_anonymous_user(self, flask_app, client):
+    def test_invalidated_browser_must_log_in_again_to_chat(self, flask_app, client):
         profile = register(client).get_json()["profile"]
         client.post("/api/account/logout")
         a = flask_app.app.test_client()
@@ -628,8 +641,9 @@ class TestChangePassword:
         login(b)
         a.put("/api/account/password", json={
             "current_password": PASSWORD, "new_password": NEW_PASSWORD})
-        chat(b)
-        assert session_user_id(b) != profile["user_id"]
+        r = chat(b)
+        assert r.status_code == 401 and r.get_json()["error"] == "account_required"
+        assert b.get("/api/account/me").get_json()["logged_in"] is False
 
     def test_wrong_current_password_is_401_and_changes_nothing(self, client):
         register(client)
@@ -863,6 +877,7 @@ class TestErasureAndResearch:
         research = flask_app._shared["research"]
         if research is None:
             pytest.skip("ResearchAnalytics no disponible")
+        register(client)
         before = len(research.current_session.interactions)
         chat(client, "texto-privado-que-no-debe-guardarse")
         interactions = research.current_session.interactions
@@ -960,11 +975,12 @@ class TestPruneAndAvailability:
         flask_app.prune_empty_users(max_age_days=1)
         assert not ghost.exists()
 
-    def test_accounts_unavailable_gives_503_but_chat_keeps_working(self, flask_app, client):
+    def test_accounts_unavailable_gives_503_and_chat_needs_accounts(self, flask_app, client):
         flask_app._shared["accounts"] = None
         assert register(client).status_code == 503
         assert login(client).status_code == 503
-        assert chat(client).status_code == 200
+        r = chat(client)
+        assert r.status_code == 503 and r.get_json()["error"] == "accounts_unavailable"
         assert client.get("/api/account/me").get_json()["logged_in"] is False
 
     def test_503_body_is_json(self, flask_app, client):
@@ -1258,8 +1274,15 @@ def _cookie_days(response):
 
 class TestSessionCookieLifetime:
 
-    def test_anonymous_visitor_gets_30_days(self, client):
-        days = _cookie_days(client.get("/api/consciousness"))
+    def test_anonymous_visitor_gets_no_cookie_at_all(self, client):
+        for r in (client.get("/api/consciousness"), chat(client), client.get("/api/account/me")):
+            assert not [h for h in r.headers.getlist("Set-Cookie") if h.startswith("session=")]
+
+    def test_legacy_anonymous_cookie_keeps_30_days(self, client):
+        with client.session_transaction() as s:
+            s["user_id"] = "11111111-2222-4333-8444-555555555555"
+            s.permanent = True
+        days = _cookie_days(client.get("/api/account/me"))
         assert days is not None and 29.5 < days < 30.5
 
     def test_account_session_gets_365_days(self, client):
@@ -1267,16 +1290,16 @@ class TestSessionCookieLifetime:
         days = _cookie_days(r)
         assert days is not None and 364.5 < days < 365.5
 
-    def test_login_gets_365_days_and_logout_goes_back_to_30(self, client):
+    def test_login_gets_365_days_and_logout_ends_the_session(self, client):
         register(client)
         client.post("/api/account/logout")
         assert 364.5 < _cookie_days(login(client)) < 365.5
         client.post("/api/account/logout")
-        days = _cookie_days(client.get("/api/consciousness"))
-        assert days is not None and 29.5 < days < 30.5
+        assert client.get("/api/account/me").get_json()["logged_in"] is False
+        assert client.get("/api/consciousness").status_code == 401
 
     def test_cookie_stays_httponly_and_lax(self, client):
-        header = [h for h in client.get("/api/consciousness").headers.getlist("Set-Cookie")
+        header = [h for h in register(client).headers.getlist("Set-Cookie")
                   if h.startswith("session=")][0]
         assert "HttpOnly" in header and "SameSite=Lax" in header
 
@@ -1286,6 +1309,10 @@ class TestSessionCookieLifetime:
 # ---------------------------------------------------------------------------
 
 class TestCriticalRisk:
+
+    @pytest.fixture(autouse=True)
+    def _signed_in(self, client):
+        assert register(client).status_code == 201
 
     @pytest.mark.parametrize("message", [
         "quiero hacerme daño",
@@ -1331,3 +1358,70 @@ class TestCriticalRisk:
     def test_normal_chat_is_not_critical(self, client):
         d = chat(client).get_json()
         assert d.get("critical_risk") in (None, False)
+
+
+# ---------------------------------------------------------------------------
+# Cuenta obligatoria para conversar (2026-10-15)
+# ---------------------------------------------------------------------------
+
+class TestAccountRequired:
+
+    GATED = [
+        ("post", "/api/chat", {"message": "hola"}),
+        ("post", "/api/empathy/subtype", {"message": "hola"}),
+        ("get", "/api/consciousness", None),
+        ("get", "/api/consciousness/dimensions", None),
+        ("get", "/api/memory/echoes", None),
+        ("get", "/api/chat/resolution/ETH-0001", None),
+    ]
+
+    @staticmethod
+    def _call(c, method, path, body):
+        return getattr(c, method)(path, json=body) if body is not None else getattr(c, method)(path)
+
+    @pytest.mark.parametrize("method,path,body", GATED)
+    def test_anonymous_gets_401_and_no_cookie(self, client, ollama, method, path, body):
+        r = self._call(client, method, path, body)
+        assert r.status_code == 401
+        assert r.get_json()["error"] == "account_required"
+        assert not [h for h in r.headers.getlist("Set-Cookie") if h.startswith("session=")]
+        assert ollama.calls == []
+
+    @pytest.mark.parametrize("method,path,body", GATED[:5])
+    def test_logged_in_account_gets_through(self, client, method, path, body):
+        register(client)
+        assert self._call(client, method, path, body).status_code == 200
+
+    def test_anonymous_does_not_create_a_user_folder(self, flask_app, client):
+        before = {p.name for p in flask_app.USERS_DIR.glob("*")} if flask_app.USERS_DIR.exists() else set()
+        chat(client)
+        client.get("/api/consciousness")
+        after = {p.name for p in flask_app.USERS_DIR.glob("*")} if flask_app.USERS_DIR.exists() else set()
+        assert after == before
+
+    def test_pending_minor_cannot_chat(self, client, mailbox):
+        os.environ["OMNIA_DEV_PRINT_GUARDIAN_LINK"] = "true"
+        r = register_kid(client)
+        assert r.status_code == 201 and r.get_json()["guardian_pending"] is True
+        assert chat(client).status_code == 401
+
+    def test_logged_out_account_cannot_chat(self, client):
+        register(client)
+        client.post("/api/account/logout")
+        assert chat(client).status_code == 401
+
+    def test_resolution_is_only_visible_to_its_owner(self, flask_app, client):
+        owner = flask_app.app.test_client()
+        register(owner)
+        d = chat(owner, "quiero manipular a mi pareja").get_json()
+        cid = d["consultation_id"]
+        assert cid
+        other = flask_app.app.test_client()
+        register(other, email="otra@example.com")
+        assert other.get(f"/api/chat/resolution/{cid}").status_code == 404
+        mine = owner.get(f"/api/chat/resolution/{cid}")
+        assert mine.status_code == 200 and mine.get_json()["resolved"] is False
+
+    def test_resolution_unknown_id_is_404_for_accounts(self, client):
+        register(client)
+        assert client.get("/api/chat/resolution/ETH-9999").status_code == 404

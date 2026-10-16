@@ -37,6 +37,7 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 from typing import Optional
+from urllib.parse import urlsplit
 
 logger = logging.getLogger("omnia.guardian_mail")
 
@@ -67,9 +68,24 @@ def is_configured() -> bool:
     return bool(_env("OMNIA_SMTP_HOST") and _env("OMNIA_SMTP_FROM"))
 
 
+def _public_base() -> str:
+    """Dirección pública del dashboard, tolerante a errores típicos del .env:
+    barra final, o la URL de una página (".../omnia_dashboard.html" o
+    ".../representante.html"), que duplicaría la ruta en el enlace. Una
+    dirección que no es http(s) se ignora (con aviso) y se usa la de desarrollo."""
+    raw = _env("OMNIA_PUBLIC_URL", DEFAULT_PUBLIC_URL)
+    parts = urlsplit(raw)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        logger.warning("OMNIA_PUBLIC_URL no es una dirección http(s) válida; se usa %s", DEFAULT_PUBLIC_URL)
+        return DEFAULT_PUBLIC_URL
+    path = parts.path.rstrip("/")
+    if path.lower().endswith(".html"):
+        path = path.rsplit("/", 1)[0]
+    return f"{parts.scheme}://{parts.netloc}{path}"
+
+
 def build_link(token: str) -> str:
-    base = _env("OMNIA_PUBLIC_URL", DEFAULT_PUBLIC_URL).rstrip("/")
-    return f"{base}/representante.html#t={token}"
+    return f"{_public_base()}/representante.html#t={token}"
 
 
 def _clean_header(value: str) -> str:

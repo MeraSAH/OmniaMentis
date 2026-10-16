@@ -9,6 +9,13 @@
 * CREADO: 2026-06-14
 * ÚLTIMA MODIFICACIÓN: 2026-10-14
 *
+* CAMBIO 2026-10-15 -- CUENTA OBLIGATORIA PARA CONVERSAR: /api/chat,
+*   /api/empathy/subtype, /api/consciousness, /api/consciousness/dimensions,
+*   /api/memory/echoes y /api/chat/resolution/<id> responden 401
+*   "account_required" sin sesión de cuenta (decorador @account_required). Una
+*   visita anónima ya no crea cookie ni carpeta de datos. La resolución del Fons
+*   solo la lee la cuenta que originó la consulta (los ID ETH-XXXX son
+*   correlativos: antes cualquiera podía leer respuestas ajenas).
 * CAMBIO 2026-10-14 -- RESOLUCIONES DEL ESPECIALISTA:
 *   (1) Edad: 13-14 años exigen confirmación VERIFICABLE del representante
 *   legal (enlace único enviado a su correo; POST /api/account/guardian/confirm
@@ -536,6 +543,27 @@ def _current_account_id() -> Optional[str]:
     if "account_id" not in session or not _account_session_valid():
         return None
     return session["account_id"]
+
+
+def account_required(view):
+    """Las rutas de conversación exigen una cuenta con la sesión iniciada
+    (decisión 2026-10-15). Sin cuenta no hay edad verificada ni consentimiento
+    registrado, y a 13-14 años el consentimiento debe ser verificable. Una
+    visita anónima no crea carpeta ni cookie: se responde 401 sin tocar nada."""
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if _current_account_id() is None:
+            if _shared.get("accounts") is None:
+                return jsonify({
+                    "error": "accounts_unavailable",
+                    "message": "El servicio de cuentas no está disponible ahora mismo. Inténtalo más tarde.",
+                }), 503
+            return jsonify({
+                "error": "account_required",
+                "message": "Para conversar con Omnia necesitas una cuenta. Crea una o inicia sesión.",
+            }), 401
+        return view(*args, **kwargs)
+    return wrapper
 
 
 def _effective_name(sess: Dict[str, Any]) -> Optional[str]:
@@ -1202,8 +1230,8 @@ def _start_account_session(account_id: str, version: int) -> None:
 
 @app.post("/api/account/register")
 def account_register():
-    """Crea la cuenta con el uuid anónimo actual (conserva su consciencia).
-    Devuelve el código de recuperación UNA sola vez."""
+    """Crea la cuenta (con el uuid anónimo heredado de la cookie, si lo hay, para
+    conservar su memoria). Devuelve el código de recuperación UNA sola vez."""
     store = _accounts()
     limited = _rate_limited("register")
     if limited:
@@ -1214,7 +1242,12 @@ def account_register():
             "message": "Ya tienes la sesión iniciada. Cierra sesión para crear otra cuenta.",
         }), 409
     data = _json_body()
-    user_id = get_user_id()
+    # No se crea cookie anónima aquí: un registro fallido no deja rastro. Una
+    # cookie anónima heredada (versiones anteriores) conserva su uuid y, con él,
+    # su memoria; si no hay, la cuenta nace con un uuid nuevo.
+    if "account_id" in session and not _account_session_valid():
+        session.clear()
+    user_id = session.get("user_id") or str(uuid.uuid4())
     # Si el uuid de esta cookie ya tiene cuenta (la sesión se limpió a medias),
     # store.register lanza IdentityInUse; no se reutiliza ni se pisa.
     profile, code = store.register(
@@ -1623,10 +1656,12 @@ def fons_decide(consultation_id: str):
 # ==================== ENTREGA ASÍNCRONA AL USUARIO ====================
 
 @app.get("/api/chat/resolution/<consultation_id>")
+@account_required
 def get_chat_resolution(consultation_id: str):
     """
-    Polling público (sin auth) para que el dashboard del usuario
-    consulte si El Fons ya resolvió una consulta SILENS.
+    Polling para que el dashboard del usuario consulte si El Fons ya resolvió
+    una consulta SILENS. Exige sesión de cuenta y que la consulta sea suya
+    (2026-10-15; antes era público y los ID son correlativos).
 
     CAMBIO 2026-09-21: ahora recupera la sesión del usuario REAL dueño
     de la consulta (vía el user_id guardado en ella) para generar la
@@ -1638,7 +1673,10 @@ def get_chat_resolution(consultation_id: str):
         return jsonify({"error": "Sistema no inicializado"}), 503
 
     consultation = _shared["ethics"].get_consultation(consultation_id)
-    if consultation is None:
+    # Solo la persona que originó la consulta puede leer su resolución: los ID
+    # (ETH-0001, ETH-0002...) son correlativos y la respuesta puede ser sensible.
+    # Para el resto, la consulta "no existe".
+    if consultation is None or consultation.get("user_id") != _current_account_id():
         return jsonify({"error": "Consulta no encontrada"}), 404
 
     from core.essence.ethics import ConsultationStatus
@@ -1713,6 +1751,7 @@ def get_chat_resolution(consultation_id: str):
 # ==================== CHAT PRINCIPAL ====================
 
 @app.post("/api/chat")
+@account_required
 def chat_endpoint():
     """Endpoint principal de chat. Body JSON: {"message": "texto"}."""
     if not _shared["initialized"]:
@@ -1911,6 +1950,7 @@ def chat_endpoint():
     })
 
 @app.post("/api/empathy/subtype")
+@account_required
 def test_grief_subtype_endpoint():
     """Endpoint de prueba aislado para la taxonomía de sub-tipos de
     duelo. No conectado al flujo de producción. Ahora usa la empatía
@@ -1945,6 +1985,7 @@ def test_grief_subtype_endpoint():
 
 
 @app.get("/api/consciousness/dimensions")
+@account_required
 def get_consciousness_dimensions_endpoint():
     """Métricas multidimensionales de consciencia, ahora por usuario.
     La dimensión ética sigue siendo del sistema completo (compartida)."""
@@ -1973,6 +2014,7 @@ def get_consciousness_dimensions_endpoint():
 
 
 @app.get("/api/consciousness")
+@account_required
 def get_consciousness():
     """Estado de consciencia del usuario actual (por cookie de sesión)."""
     if not _shared["initialized"]:
@@ -2002,6 +2044,7 @@ def get_consciousness():
     })
 
 @app.get("/api/memory/echoes")
+@account_required
 def get_memory_echoes():
     """Ecos de memoria recientes del usuario actual."""
     if not _shared["initialized"]:

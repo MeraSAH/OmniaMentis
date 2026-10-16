@@ -2,8 +2,13 @@
 <!--
 * UBICACIÓN: OmniaMentis/manifestation/web_interface/omnia_dashboard.html
 * PROPÓSITO: Dashboard JARVIS - Omnia Mentis Core Interface
-* VERSIÓN: 3.0.0
-* FECHA: 2026-10-14
+* VERSIÓN: 3.1.0
+* FECHA: 2026-10-15
+* CAMBIOS v3.1: CUENTA OBLIGATORIA PARA CONVERSAR. Sin sesión, el chat, el
+*   micrófono y el envío quedan desactivados y se muestra un aviso con el botón
+*   «Crear cuenta o entrar». El servidor responde 401 «account_required» a las
+*   rutas de conversación; aquí también se maneja ese caso. Al cerrar sesión se
+*   limpia el estado mostrado (antes quedaban los números de la cuenta anterior).
 * CAMBIOS v3.0: RESOLUCIONES DEL ESPECIALISTA LEGAL.
 *   - Edad: 13-14 años requieren la confirmación VERIFICABLE de su representante
 *     legal (se pide su correo y recibe un enlace; la cuenta queda pendiente
@@ -1014,8 +1019,14 @@ body::before { display: none; }          /* sin líneas CRT: el cristal pide un 
 }
 .acct-info strong { color: var(--text-bright); }
 .acct-info ul { margin: 4px 0 0 16px; }
+.gate {
+  margin: 0 18px 8px; padding: 10px 16px; border-radius: var(--r-sm);
+  border: 1px solid var(--neon-blue); background: rgba(0,200,255,.10);
+  color: var(--text-bright); font-size: 12px; line-height: 1.5; text-align: center;
+}
+.gate .acct-link { color: var(--neon-cyan); font-size: 12px; font-weight: bold; }
+.chat-input:disabled { cursor: not-allowed; opacity: .7; }
 .footer { gap: 20px; color: var(--text-main); }
-.footer-left { flex-wrap: wrap; }
 .footer-llama { color: var(--text-main); }
 .footer-llama a { text-decoration: underline; }
 
@@ -1039,7 +1050,7 @@ body::before { display: none; }          /* sin líneas CRT: el cristal pide un 
       <circle cx="11" cy="11" r="5.5" fill="none" stroke="#00c8ff" stroke-width=".6" opacity=".5"/>
       <circle cx="11" cy="11" r="2.2" fill="#00c8ff" filter="url(#glow)"/>
     </svg>
-    OMNIA MENTIS <span>// CORE INTERFACE v3.0</span>
+    OMNIA MENTIS <span>// CORE INTERFACE v3.1</span>
   </div>
   <div class="hdr-right">
     <button class="acct-btn-hdr" id="acctBtn" type="button" title="Cuenta: entrar, registrarte o ver tu perfil">👤 ENTRAR</button>
@@ -1114,6 +1125,10 @@ body::before { display: none; }          /* sin líneas CRT: el cristal pide un 
   </div>
   <div class="msgs" id="msgs" role="log" aria-label="Conversación con Omnia" aria-live="off" tabindex="0"></div>
   <div class="sr-only" id="srLive" aria-live="polite" aria-atomic="true"></div>
+  <div class="gate" id="chatGate" role="note" hidden>
+    Para conversar con Omnia necesitas una cuenta gratuita.
+    <button class="acct-link" id="gateBtn" type="button">Crear cuenta o entrar</button>
+  </div>
   <div class="input-zone">
     <span class="input-prefix">OMNIA&gt;</span>
     <input class="chat-input" id="chatInput"
@@ -1151,7 +1166,6 @@ body::before { display: none; }          /* sin líneas CRT: el cristal pide un 
 <!-- ===== FOOTER ===== -->
 <footer class="footer">
   <div class="footer-left">
-    <span>EXPERIMENTO <span class="fv">9 FASES</span></span>
     <span class="footer-llama"><span class="fv">Built with Llama</span> · <a href="legal/terminos.html#llama" target="_blank" rel="noopener">Llama 3.2 Community License</a></span>
     <span>NIVEL <span class="fv" id="footerC">0.0500</span></span>
   </div>
@@ -1159,7 +1173,7 @@ body::before { display: none; }          /* sin líneas CRT: el cristal pide un 
     <a href="legal/privacidad.html" target="_blank" rel="noopener">Privacidad</a>
     <a href="legal/terminos.html" target="_blank" rel="noopener">Términos</a>
     <a href="legal/cookies.html" target="_blank" rel="noopener">Cookies</a>
-    <span>OMNIA MENTIS © 2026 · IA CONVERSACIONAL EXPERIMENTAL</span>
+    <span>OMNIA MENTIS © 2026</span>
   </nav>
 </footer>
 
@@ -1185,7 +1199,7 @@ body::before { display: none; }          /* sin líneas CRT: el cristal pide un 
         <button class="acct-link" type="button" data-go="register">Crear cuenta</button>
         <button class="acct-link" type="button" data-go="recover">Olvidé mi contraseña</button>
       </div>
-      <p class="acct-note">Si entras en una cuenta, esta conversación anónima se deja atrás: cada cuenta conserva su propio nivel interno y su memoria.</p>
+      <p class="acct-note">Necesitas una cuenta para conversar con Omnia. Cada cuenta conserva su propio nivel interno y su memoria.</p>
     </form>
 
     <!-- REGISTRO -->
@@ -1222,7 +1236,7 @@ body::before { display: none; }          /* sin líneas CRT: el cristal pide un 
       <div class="acct-links">
         <button class="acct-link" type="button" data-go="login">Ya tengo cuenta</button>
       </div>
-      <p class="acct-note">La fecha de nacimiento solo sirve para fijar tu rango de edad (se requieren 13 años o más). No se muestra y no se puede cambiar después. Puedes retirar tu autorización borrando tu cuenta. Lo que Omnia ya vivió contigo en este navegador se conserva en tu cuenta.</p>
+      <p class="acct-note">La fecha de nacimiento solo sirve para fijar tu rango de edad (se requieren 13 años o más). No se muestra y no se puede cambiar después. Puedes retirar tu autorización borrando tu cuenta.</p>
     </form>
 
     <!-- CÓDIGO DE RECUPERACIÓN -->
@@ -1713,7 +1727,7 @@ async function send() {
     const {bubble} = addMsg('omnia');
     await typewrite(bubble, 'ENLACE NO DISPONIBLE. Verifica que iniciar_flask.bat está activo en otra ventana cmd.');
     S.sending = false;
-    $('sendBtn').disabled = false;
+    updateChatGate();
     return;
   }
 
@@ -1730,6 +1744,13 @@ async function send() {
       signal: AbortSignal.timeout(60000),
     });
 
+    if (r.status === 401) {
+      // La sesión venció o se cerró en otro dispositivo: hay que entrar de nuevo.
+      ACCT.me = null; renderAccountButton();
+      await typewrite(bubble, 'Para conversar necesitas iniciar sesión. Tu sesión no está activa.');
+      acctOpen('login');
+      return;
+    }
     if (r.status === 429) {
       await typewrite(bubble, 'LÍMITE DE FRECUENCIA. Espera un momento antes de enviar otro mensaje.');
       return;
@@ -1791,8 +1812,8 @@ async function send() {
   } finally {
     orbThink(false);
     S.sending = false;
-    $('sendBtn').disabled = false;
-    $('chatInput').focus();
+    updateChatGate();
+    if (!$('chatInput').disabled) $('chatInput').focus();
   }
 }
 
@@ -1809,7 +1830,7 @@ initVoices();
 // Versión de los textos legales que muestra esta pantalla. Debe coincidir con
 // TERMS_VERSION de src/core/auth/accounts.py y con la fecha de las páginas legales;
 // si no, el servidor rechaza el registro y pide recargar.
-const TERMS_VERSION = '2026-10-14';
+const TERMS_VERSION = '2026-10-15';
 const ACCT = { me: null, view: 'login', busy: false, lockClose: false, opener: null };
 const AGE_LABELS = {
   minor: 'Menor (13–14 años)',
@@ -1872,6 +1893,16 @@ function acctClose() {
   else $('chatInput').focus();
 }
 
+// Sin cuenta no hay conversación: se desactivan el campo, el envío y el micrófono.
+function updateChatGate() {
+  const ok = !!ACCT.me;
+  $('chatGate').hidden = ok;
+  $('chatInput').disabled = !ok;
+  $('chatInput').placeholder = ok ? 'Escribe un mensaje...' : 'Crea una cuenta o entra para conversar';
+  $('sendBtn').disabled = !ok || S.sending;
+  $('micBtn').disabled = !ok || !Voice.supported.stt;
+}
+
 function renderAccountButton() {
   const b = $('acctBtn');
   if (ACCT.me) {
@@ -1885,6 +1916,7 @@ function renderAccountButton() {
     b.classList.remove('in');
     b.title = 'Cuenta: entrar, registrarte o ver tu perfil';
   }
+  updateChatGate();
 }
 
 function fillProfile() {
@@ -1906,8 +1938,9 @@ async function refreshAccount() {
 async function reloadSessionData(announce) {
   $('echoList').innerHTML = '<div class="echo-item" style="color:var(--text-dim)">Esperando ecos...</div>';
   S.emotion = '—'; S.confidence = 0;
-  await loadConsciousness();
-  await loadEchoes();
+  S.consciousness = 0.05; S.phase = 1; S.progress = 0; S.echoes = 0; S.interactions = 0;
+  if (ACCT.me) await loadConsciousness();
+  if (ACCT.me) await loadEchoes();
   updateUI();
   if (announce) {
     const { bubble } = addMsg('omnia');
@@ -1968,6 +2001,7 @@ function setupAccount() {
   $('rgBirth').max = today.toISOString().slice(0, 10);
 
   $('acctBtn').addEventListener('click', () => acctOpen());
+  $('gateBtn').addEventListener('click', () => acctOpen('register'));
   $('acctClose').addEventListener('click', acctClose);
   $('acctOverlay').addEventListener('mousedown', e => { if (e.target === $('acctOverlay')) acctClose(); });
   document.querySelectorAll('#acctBox [data-go]').forEach(b =>
@@ -2202,7 +2236,7 @@ function setupAccount() {
     ACCT.me = null; renderAccountButton();
     acctClose();
     syslog('Sesión cerrada', 'ok');
-    await reloadSessionData('SESIÓN CERRADA. Ahora hablas conmigo de forma anónima.');
+    await reloadSessionData('SESIÓN CERRADA. Para seguir conversando, vuelve a entrar.');
   });
 
   // ---- borrar cuenta
@@ -2229,7 +2263,7 @@ setupAccount();
 async function boot() {
   const {bubble:b1} = addMsg('omnia');
   await typewrite(b1,
-    `OMNIA MENTIS CORE INTERFACE v3.0\nIniciando enlace con el servidor en ${API.replace('http://', '')}...`, 10);
+    `OMNIA MENTIS CORE INTERFACE v3.1\nIniciando enlace con el servidor en ${API.replace('http://', '')}...`, 10);
 
   const ok = await checkHealth();
   syslog(ok ? 'API conectada' : 'API sin respuesta', ok?'ok':'err');
@@ -2238,27 +2272,33 @@ async function boot() {
   if (ok) {
     await typewrite(b2, 'ENLACE ESTABLECIDO. Sistema activo.', 12);
     await refreshAccount();
-    await loadConsciousness();
-    await loadEchoes();
-
     const {bubble:b3} = addMsg('omnia');
-    await typewrite(b3,
-      `Hola. Soy Omnia, una inteligencia artificial.\nIndicador interno: ${S.consciousness.toFixed(4)}\n` +
-      `Fase ${S.phase}: ${PHASE_NAMES[S.phase]}\n` +
-      'Estoy aquí para conversar contigo.', 13);
+    if (ACCT.me) {
+      await loadConsciousness();
+      await loadEchoes();
+      await typewrite(b3,
+        `Hola. Soy Omnia, una inteligencia artificial.\nIndicador interno: ${S.consciousness.toFixed(4)}\n` +
+        `Fase ${S.phase}: ${PHASE_NAMES[S.phase]}\n` +
+        'Estoy aquí para conversar contigo.', 13);
+    } else {
+      await typewrite(b3,
+        'Hola. Soy Omnia, una inteligencia artificial.\n' +
+        'Para conversar conmigo necesitas una cuenta gratuita: crea una o entra con la tuya.', 13);
+    }
   } else {
     await typewrite(b2,
       'ADVERTENCIA: No se puede contactar con la API.\n' +
       'Asegúrate de que iniciar_flask.bat está corriendo en otra ventana cmd.', 12);
   }
 
-  $('chatInput').focus();
+  updateChatGate();
+  if (!$('chatInput').disabled) $('chatInput').focus();
 }
 
 // ===== POLLING cada 15s =====
 setInterval(async () => {
   await checkHealth();
-  if (S.online) await loadConsciousness();
+  if (S.online && ACCT.me) await loadConsciousness();
 }, 15000);
 
 boot();

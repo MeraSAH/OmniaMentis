@@ -2,7 +2,7 @@
 <!--
 * UBICACIÓN: OmniaMentis/manifestation/web_interface/legal/cookies.html
 * PROPÓSITO: Política de cookies y almacenamiento local de OmniaMentis.
-* VERSIÓN DE LOS TEXTOS: 2026-10-14 (ver TERMS_VERSION en accounts.py).
+* VERSIÓN DE LOS TEXTOS: 2026-10-15 (ver TERMS_VERSION en accounts.py).
 * BASE: el servicio solo usa una cookie propia, técnica y necesaria (sesión
 *   firmada de Flask, HttpOnly, SameSite=Lax, 365 días). No hay analíticas,
 *   publicidad ni terceros, por lo que no se muestra un banner de
@@ -33,7 +33,7 @@
 
 <main id="contenido">
 <h1>Política de cookies</h1>
-<p class="meta">Última actualización: 14 de octubre de 2026 · Versión 2026-10-14</p>
+<p class="meta">Última actualización: 15 de octubre de 2026 · Versión 2026-10-15</p>
 
 <div class="callout" role="note">
   <p><strong>En resumen.</strong> OmniaMentis usa <strong>una sola cookie, propia y necesaria</strong> para que Omnia te reconozca.
@@ -55,12 +55,12 @@
       <th scope="row"><code>session</code></th>
       <td>Propia, técnica y estrictamente necesaria.</td>
       <td>Un identificador anónimo (o el de tu cuenta, si iniciaste sesión) y un número de versión de la sesión, firmados para que no se puedan alterar. Sirve para que Omnia mantenga tu progreso y tu memoria y para mantener tu sesión iniciada. Nunca contiene tu contraseña ni tus mensajes.</td>
-      <td>30 días desde tu última visita si no tienes cuenta; 365 días si iniciaste sesión en una cuenta.</td>
+      <td>365 días mientras tengas la sesión iniciada. Se elimina al cerrar sesión.</td>
     </tr>
   </tbody>
 </table>
 </div>
-<p><strong>Por qué dos duraciones.</strong> Para quien visita sin cuenta, la cookie dura 30 días desde su última visita (se renueva cada vez que vuelve). Para quien inició sesión en una cuenta, dura 365 días: es la credencial técnica necesaria para no tener que volver a iniciar sesión cada día. Al cerrar sesión, tu navegador la sustituye por una anónima.</p>
+<p><strong>Solo con cuenta.</strong> Quien visita sin cuenta no recibe ninguna cookie, porque sin cuenta no se puede conversar. La cookie se crea únicamente cuando creas una cuenta o inicias sesión, y dura 365 días: es la credencial técnica necesaria para no tener que volver a iniciar sesión cada día. Al cerrar sesión, tu navegador la elimina.</p>
 <p>Características de seguridad: <code>HttpOnly</code> (los scripts de la página no pueden leerla), <code>SameSite=Lax</code> (no se envía en peticiones de otros sitios) y <code>Secure</code> cuando el servicio se sirve por HTTPS.</p>
 
 <h2 id="consentimiento">3. ¿Por qué no hay banner de cookies?</h2>
@@ -86,9 +86,8 @@ disponible para usuarios.</p>
 <p>Puedes borrar o bloquear las cookies desde los ajustes de tu navegador (en Chrome, Edge, Firefox y Safari, en «Privacidad» o
 «Cookies y datos del sitio»). Ten en cuenta que:</p>
 <ul>
-  <li>Si tienes cuenta, al borrarla simplemente tendrás que volver a iniciar sesión.</li>
-  <li>Si <strong>no</strong> tienes cuenta, al borrarla perderás el acceso a tu progreso y a tu memoria con Omnia, porque no habrá forma de reconocerte. Crear una cuenta antes de borrar la cookie lo evita.</li>
-  <li>Si la bloqueas, Omnia funcionará pero tratará cada mensaje como si vinieras por primera vez.</li>
+  <li>Al borrarla tendrás que volver a iniciar sesión; tu cuenta y tu memoria con Omnia no se pierden.</li>
+  <li>Si la bloqueas, no podrás iniciar sesión ni conversar con Omnia.</li>
 </ul>
 
 <h2 id="cambios">7. Cambios y contacto</h2>

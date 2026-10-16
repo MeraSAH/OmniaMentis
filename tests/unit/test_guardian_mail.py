@@ -124,6 +124,24 @@ class TestLink:
         monkeypatch.setenv("OMNIA_PUBLIC_URL", "https://omnia.example/")
         assert gm.build_link(TOKEN) == f"https://omnia.example/representante.html#t={TOKEN}"
 
+    @pytest.mark.parametrize("configured,expected_base", [
+        ("http://127.0.0.1:8080/representante.html", "http://127.0.0.1:8080"),       # error real visto en un .env
+        ("http://127.0.0.1:8080/omnia_dashboard.html", "http://127.0.0.1:8080"),
+        ("https://omnia.example/app/omnia_dashboard.html", "https://omnia.example/app"),
+        ("https://omnia.example/app/", "https://omnia.example/app"),
+        ("https://omnia.example//", "https://omnia.example"),
+        ("  https://omnia.example  ", "https://omnia.example"),
+        ("https://omnia.example/?x=1#frag", "https://omnia.example"),
+    ])
+    def test_public_url_is_normalised(self, monkeypatch, configured, expected_base):
+        monkeypatch.setenv("OMNIA_PUBLIC_URL", configured)
+        assert gm.build_link(TOKEN) == f"{expected_base}/representante.html#t={TOKEN}"
+
+    @pytest.mark.parametrize("bad", ["omnia.example", "ftp://omnia.example", "javascript:alert(1)", "://x", "/solo/ruta"])
+    def test_invalid_public_url_falls_back_to_dev_address(self, monkeypatch, bad):
+        monkeypatch.setenv("OMNIA_PUBLIC_URL", bad)
+        assert gm.build_link(TOKEN) == f"http://127.0.0.1:8080/representante.html#t={TOKEN}"
+
     def test_token_goes_in_the_fragment_not_the_query(self):
         link = gm.build_link(TOKEN)
         assert "?" not in link and "#t=" in link
@@ -243,3 +261,106 @@ class TestSmtp:
                 gm.send_guardian_link("secreto@example.com", TOKEN, "n@example.com")
         assert "secreto@example.com" not in caplog.text and TOKEN not in caplog.text
         assert "SMTPRecipientsRefused" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Envío REAL por socket (sin dobles de smtplib): un servidor SMTP mínimo en
+# 127.0.0.1 recibe el mensaje tal como lo enviaría un servidor de correo.
+# Cubre la ruta "none" (sin TLS ni login); STARTTLS/SSL y la autenticación
+# dependen del proveedor y se prueban con el SMTP real (ver README).
+# ---------------------------------------------------------------------------
+
+import socketserver
+import threading
+from email import message_from_bytes
+from email import policy
+
+
+class _MiniSMTP(socketserver.StreamRequestHandler):
+    received = []
+
+    def _send(self, line):
+        self.wfile.write((line + "\r\n").encode())
+
+    def handle(self):
+        self._send("220 mini ESMTP")
+        data_mode, buf, envelope = False, [], {}
+        while True:
+            raw = self.rfile.readline()
+            if not raw:
+                return
+            line = raw.decode("utf-8", "replace").rstrip("\r\n")
+            if data_mode:
+                if line == ".":
+                    data_mode = False
+                    _MiniSMTP.received.append({"envelope": dict(envelope), "data": "\r\n".join(buf).encode()})
+                    buf = []
+                    self._send("250 OK queued")
+                else:
+                    buf.append(line[1:] if line.startswith("..") else line)
+                continue
+            cmd = line.upper()
+            if cmd.startswith("EHLO"):
+                self._send("250-mini")
+                self._send("250 8BITMIME")
+            elif cmd.startswith("HELO"):
+                self._send("250 mini")
+            elif cmd.startswith("MAIL FROM"):
+                envelope["from"] = line.split(":", 1)[1].strip()
+                self._send("250 OK")
+            elif cmd.startswith("RCPT TO"):
+                envelope["to"] = line.split(":", 1)[1].strip()
+                self._send("250 OK")
+            elif cmd == "DATA":
+                data_mode = True
+                self._send("354 go")
+            elif cmd == "QUIT":
+                self._send("221 bye")
+                return
+            else:
+                self._send("250 OK")
+
+
+@pytest.fixture
+def mini_smtp():
+    _MiniSMTP.received = []
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _MiniSMTP)
+    server.daemon_threads = True
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    yield server.server_address[1]
+    server.shutdown()
+    server.server_close()
+
+
+class TestRealSocket:
+
+    def test_the_message_really_arrives_with_the_link(self, monkeypatch, mini_smtp):
+        _smtp_env(monkeypatch, OMNIA_SMTP_HOST="127.0.0.1", OMNIA_SMTP_PORT=str(mini_smtp),
+                  OMNIA_SMTP_SECURITY="none", OMNIA_PUBLIC_URL="https://omnia.example")
+        gm.send_guardian_link("mama@example.com", TOKEN, "nino@example.com", "Luis")
+        assert len(_MiniSMTP.received) == 1
+        got = _MiniSMTP.received[0]
+        assert "mama@example.com" in got["envelope"]["to"]
+        assert "no-reply@test.example" in got["envelope"]["from"]
+        msg = message_from_bytes(got["data"], policy=policy.default)
+        assert msg["To"] == "mama@example.com"
+        assert "Autorización de representante legal" in msg["Subject"]
+        body = msg.get_body().get_content()
+        assert f"https://omnia.example/representante.html#t={TOKEN}" in body
+        assert "Luis (nino@example.com)" in body
+
+    def test_accented_subject_and_body_survive_the_wire(self, monkeypatch, mini_smtp):
+        _smtp_env(monkeypatch, OMNIA_SMTP_HOST="127.0.0.1", OMNIA_SMTP_PORT=str(mini_smtp),
+                  OMNIA_SMTP_SECURITY="none")
+        gm.send_guardian_link("mama@example.com", TOKEN, "nino@example.com", "Ñandú Pérez")
+        msg = message_from_bytes(_MiniSMTP.received[0]["data"], policy=policy.default)
+        assert "representante" in msg["Subject"] and "Ñandú Pérez" in msg.get_body().get_content()
+
+    def test_connection_refused_becomes_mail_error(self, monkeypatch):
+        import socket
+        s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+        _smtp_env(monkeypatch, OMNIA_SMTP_HOST="127.0.0.1", OMNIA_SMTP_PORT=str(port),
+                  OMNIA_SMTP_SECURITY="none")
+        with pytest.raises(gm.MailError):
+            gm.send_guardian_link("mama@example.com", TOKEN, "nino@example.com")

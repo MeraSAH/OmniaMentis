@@ -49,6 +49,7 @@
 * que estos valores son exactos, no aproximaciones generosas.
 """
 
+import itertools
 import os
 import sys
 from pathlib import Path
@@ -60,6 +61,7 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from core.llm.ollama_client import OllamaUnavailableError
+from core.auth.accounts import TERMS_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -118,12 +120,36 @@ def flask_app(tmp_path_factory):
     os.chdir(old_cwd)
 
 
+_ACCOUNT_SEQ = itertools.count(1)
+
+
+def _authed(flask_app):
+    """Cliente NUEVO con una cuenta recién creada y la sesión iniciada. Desde
+    2026-10-15 conversar exige cuenta; cada cliente es un 'usuario' distinto."""
+    c = flask_app.app.test_client()
+    flask_app._account_rate.clear()           # el registro tiene su propio límite por IP
+    r = c.post("/api/account/register", json={
+        "email": f"usuario{next(_ACCOUNT_SEQ)}@example.com",
+        "password": "ClaveSegura#2026",
+        "birth_date": "1990-05-05",
+        "consent": {"version": TERMS_VERSION, "terms": True, "sensitive": True},
+    })
+    assert r.status_code == 201, r.get_json()
+    flask_app._rate_data.clear()              # esa petición no cuenta para el límite general
+    flask_app._account_rate.clear()
+    return c
+
+
+def _anon(flask_app):
+    """Cliente sin cuenta (visitante anónimo)."""
+    return flask_app.app.test_client()
+
+
 @pytest.fixture
 def client(flask_app):
-    """Un test_client() nuevo por test = un 'usuario' nuevo: cookie
-    jar vacía, sin sesión previa. Dos llamadas a esta fixture en el
-    mismo test (dos clientes) simulan dos usuarios distintos."""
-    return flask_app.app.test_client()
+    """Un cliente con cuenta nuevo por test = un 'usuario' nuevo. Dos
+    llamadas a _authed(flask_app) en el mismo test simulan dos usuarios."""
+    return _authed(flask_app)
 
 
 _ISOLATED_ENV_VARS = (
@@ -278,8 +304,8 @@ class TestUserSessionIsolation:
         cookie jars separadas) nunca deben compartir ni mezclar su
         nivel de consciencia, sin importar cuántos mensajes mande cada
         uno por separado."""
-        client_a = flask_app.app.test_client()
-        client_b = flask_app.app.test_client()
+        client_a = _authed(flask_app)
+        client_b = _authed(flask_app)
 
         post_chat(client_a, "Hola")
         r_a2 = post_chat(client_a, "Hola")  # A: dos mensajes
@@ -298,8 +324,8 @@ class TestUserSessionIsolation:
         )
 
     def test_second_client_consciousness_endpoint_independent(self, flask_app):
-        client_a = flask_app.app.test_client()
-        client_b = flask_app.app.test_client()
+        client_a = _authed(flask_app)
+        client_b = _authed(flask_app)
 
         post_chat(client_a, "Hola")
         post_chat(client_a, "Hola")  # A avanza dos pasos
@@ -335,8 +361,8 @@ class TestMemoryPerUser:
         assert "triste" in body["echoes"][0]["content"]
 
     def test_echoes_not_shared_between_clients(self, flask_app):
-        client_a = flask_app.app.test_client()
-        client_b = flask_app.app.test_client()
+        client_a = _authed(flask_app)
+        client_b = _authed(flask_app)
 
         post_chat(client_a, "Me siento muy triste hoy")
 
@@ -495,7 +521,7 @@ class TestStatedName:
         try:
             post_chat(client, "Hola, soy Stalin Mera")
             post_chat(client, "¿cuál es mi nombre?")
-            other = flask_app.app.test_client()
+            other = _authed(flask_app)
             post_chat(other, "¿cuál es mi nombre?")
         finally:
             flask_app._shared["ollama"] = original
@@ -592,32 +618,32 @@ class TestNewUserCap:
 
     def test_cap_blocks_new_users_from_same_ip_but_not_existing_ones(self, flask_app):
         os.environ["MAX_NEW_USERS_PER_IP_HOUR"] = "2"
-        statuses = [flask_app.app.test_client().get("/api/consciousness").status_code
+        statuses = [_authed(flask_app).get("/api/consciousness").status_code
                     for _ in range(3)]
         assert statuses == [200, 200, 429]
 
     def test_user_with_cookie_is_not_affected_by_cap(self, flask_app):
         os.environ["MAX_NEW_USERS_PER_IP_HOUR"] = "1"
-        c = flask_app.app.test_client()
+        c = _authed(flask_app)
         assert c.get("/api/consciousness").status_code == 200   # crea el usuario
         for _ in range(5):                                      # ya existe -> sin tope
             assert c.get("/api/consciousness").status_code == 200
 
     def test_429_body_is_json_with_message(self, flask_app):
         os.environ["MAX_NEW_USERS_PER_IP_HOUR"] = "1"
-        flask_app.app.test_client().get("/api/consciousness")
-        r = flask_app.app.test_client().get("/api/consciousness")
+        _authed(flask_app).get("/api/consciousness")
+        r = _authed(flask_app).get("/api/consciousness")
         assert r.status_code == 429
         assert "message" in r.get_json()
 
     def test_zero_disables_cap(self, flask_app):
         os.environ["MAX_NEW_USERS_PER_IP_HOUR"] = "0"
         for _ in range(5):
-            assert flask_app.app.test_client().get("/api/consciousness").status_code == 200
+            assert _authed(flask_app).get("/api/consciousness").status_code == 200
 
     def test_invalid_value_falls_back_to_default(self, flask_app):
         os.environ["MAX_NEW_USERS_PER_IP_HOUR"] = "muchos"
-        assert flask_app.app.test_client().get("/api/consciousness").status_code == 200
+        assert _authed(flask_app).get("/api/consciousness").status_code == 200
 
 
 class TestSessionEviction:
@@ -659,7 +685,7 @@ class TestSessionEviction:
     def test_capacity_error_is_503_over_http(self, flask_app, clean_sessions):
         os.environ["MAX_ACTIVE_SESSIONS"] = "1"
         self._make(flask_app, 0)
-        r = flask_app.app.test_client().get("/api/consciousness")
+        r = _authed(flask_app).get("/api/consciousness")
         assert r.status_code == 503
 
     def test_evicted_session_is_rebuilt_from_disk_with_its_state(self, flask_app, clean_sessions):

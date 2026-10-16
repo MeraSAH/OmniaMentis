@@ -4,7 +4,7 @@
 Corre en tu propia máquina: API Flask + modelo local (Ollama) + dashboard web.
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
-![Tests](https://img.shields.io/badge/tests-707%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
 ![Licencia](https://img.shields.io/badge/licencia-OMPL%20(propietaria)-red)
 
 > **Estado:** desarrollo activo. La API, la memoria, la ética (SILENS/Fons) y el
@@ -66,10 +66,11 @@ OmniaMentis/
 │   ├── analytics/                 # métricas de investigación
 │   └── router/                    # router de módulos
 ├── manifestation/web_interface/   # dashboard y panel del Fons
+│   └── legal/                     # privacidad.html, terminos.html, cookies.html, legal.css
 ├── data/users/<uuid>/             # datos por usuario (NO se sube a Git)
 ├── data/accounts.db               # cuentas (NO se sube a Git)
 ├── scripts/                       # utilidades (contraseña del Fons, etc.)
-├── tests/                         # 707 tests
+├── tests/                         # tests unitarios (sin red ni Ollama real)
 └── requirements.txt
 ```
 
@@ -122,6 +123,10 @@ Variables que reconoce la API:
 | `MAX_ACTIVE_SESSIONS` | Sesiones simultáneas en memoria | `500` |
 | `SESSION_IDLE_TTL_SECONDS` | Inactividad antes de cerrar una sesión | `1800` |
 | `PRUNE_EMPTY_USERS_DAYS` | Días para borrar carpetas de usuarios que nunca crecieron ni dijeron su nombre | `7` |
+| `OMNIA_RESEARCH_LOGGING` | `true` activa la analítica de investigación (`research/`). **Apagada por defecto**; encendida, nunca guarda el texto de los mensajes, solo métricas | desactivado |
+| `OMNIA_SMTP_HOST`, `OMNIA_SMTP_PORT`, `OMNIA_SMTP_USER`, `OMNIA_SMTP_PASSWORD`, `OMNIA_SMTP_FROM`, `OMNIA_SMTP_SECURITY` | Correo saliente para el enlace del representante legal (13–14 años). Sin SMTP, ese registro está cerrado | sin configurar |
+| `OMNIA_PUBLIC_URL` | Dirección pública del dashboard (el enlace apunta a `/representante.html`) | `http://127.0.0.1:8080` |
+| `OMNIA_DEV_PRINT_GUARDIAN_LINK` | **Solo desarrollo**: imprime el enlace del representante en la consola en vez de enviarlo | desactivado |
 | `OMNIA_DEV_CONSCIOUSNESS` | **Solo desarrollo**: fuerza un nivel (0.05–1.0) para probar fases; no guarda en disco | desactivado |
 
 \* Define `APP_SECRET_KEY` fijo en `.env`: con una clave temporal, cada reinicio de la API invalida las cookies y los usuarios dejan de reconocerse.
@@ -165,13 +170,16 @@ Entra por **`http://127.0.0.1:8080/omnia_dashboard.html`**.
 | `GET` | `/api/memory/echoes` | Ecos de memoria del usuario |
 | `GET` | `/api/modules` | Módulos registrados en el router |
 | `GET` | `/api/ethics/status` | Estado del sistema ético |
-| `POST` | `/api/account/register` | Crear cuenta (`email`, `password`, `birth_date`, `display_name` opcional); devuelve el código de recuperación una sola vez |
-| `POST` | `/api/account/login` | Iniciar sesión (`email`, `password`) |
+| `POST` | `/api/account/register` | Crear cuenta (`email`, `password`, `birth_date`, `display_name` opcional y `consent`: `{version, terms, sensitive}` y, a los 13–14 años, `guardian_email`); devuelve el código de recuperación una sola vez. A los 13–14 años responde `guardian_pending: true` y **no inicia sesión** |
+| `POST` | `/api/account/login` | Iniciar sesión (`email`, `password`). Cuenta de 13–14 años sin confirmar: 403 `guardian_pending` |
+| `POST` | `/api/account/guardian/confirm` | El representante confirma desde su enlace (`token`, `consent`: `{version, terms, sensitive}`) |
+| `POST` | `/api/account/guardian/resend` | Reenviar o corregir el correo del representante (`email`, `password`, `guardian_email` opcional; espera 10 min entre envíos) |
 | `POST` | `/api/account/logout` | Cerrar sesión |
 | `GET` | `/api/account/me` | ¿Hay sesión iniciada? Devuelve el perfil público |
 | `PUT` | `/api/account/profile` | Cambiar el nombre (`display_name`) |
 | `PUT` | `/api/account/password` | Cambiar contraseña (`current_password`, `new_password`) |
 | `POST` | `/api/account/recover` | Restablecer contraseña con el código (`email`, `recovery_code`, `new_password`) |
+| `POST` | `/api/account/export` | Descargar todos tus datos en JSON (`password`) |
 | `DELETE` | `/api/account` | Borrar la cuenta y todos sus datos (`password`) |
 | `POST` | `/api/auth/login` | Login de El Fons (independiente de las cuentas) |
 | `*` | `/api/ethics/...` | Consultas y decisiones del Fons (requiere login) |
@@ -180,12 +188,29 @@ Entra por **`http://127.0.0.1:8080/omnia_dashboard.html`**.
 
 ## 👤 Cuentas de usuario
 
-Sin cuenta, Omnia te reconoce por una cookie anónima. Con cuenta, tu consciencia
-y tu memoria te acompañan entre navegadores y dispositivos.
+**Para conversar con Omnia hace falta una cuenta** (decisión 2026-10-15): sin sesión
+iniciada, `/api/chat`, `/api/empathy/subtype`, `/api/consciousness`,
+`/api/consciousness/dimensions`, `/api/memory/echoes` y `/api/chat/resolution/<id>`
+responden `401 account_required` y el dashboard desactiva el chat. Una visita
+anónima no recibe cookie ni crea carpeta de datos. Con cuenta, tu nivel interno y tu
+memoria te acompañan entre navegadores y dispositivos.
 
 - **Registro**: email, contraseña (mínimo 10 caracteres), fecha de nacimiento y,
-  opcionalmente, tu nombre. El uuid anónimo actual pasa a ser tu cuenta: lo que
-  Omnia ya vivió contigo **se conserva**.
+  opcionalmente, tu nombre, más dos aceptaciones separadas y obligatorias
+  (Términos y Privacidad; autorización expresa del tratamiento de datos de salud y estado emocional, casilla desmarcada y propia). La cuenta recibe un identificador (uuid) propio; si el
+  navegador traía una cookie anónima de versiones anteriores, se reutiliza su uuid y su memoria se conserva.
+- **Consentimiento**: se guarda con la versión de los textos aceptada
+  (`TERMS_VERSION`, hoy `2026-10-15`). Si los textos cambian, hay que subir
+  `TERMS_VERSION` en `accounts.py`, en `omnia_dashboard.html` y en las tres páginas.
+- **Edad y representante legal** (resolución del especialista, 2026-10-14):
+  menos de 13, prohibido; **13–14 años**, consentimiento verificable del
+  representante: al registrarse se pide su correo, recibe un enlace personal
+  (token aleatorio de un solo uso, vale 7 días, solo se guarda su huella
+  SHA-256, viaja en el fragmento `#t=` de `representante.html`) y la cuenta
+  queda **pendiente**: no puede iniciar sesión hasta que confirme; sin confirmar
+  se borra a los 30 días. **15–17 años**, consentimiento propio con un resumen en
+  lenguaje claro. Si no hay SMTP el registro de 13–14 años responde 503 (falla
+  cerrado). No se pide copia de cédula: se verifica el control del correo.
 - **Edad**: se necesitan 13 años o más. La fecha de nacimiento no se muestra, no
   se puede cambiar y solo se usa para fijar el rango de edad (`minor` 13–14,
   `minor_basic` 15–17, `adult` 18+) que el resto del ecosistema podrá consultar.
@@ -199,11 +224,17 @@ y tu memoria te acompañan entre navegadores y dispositivos.
   dispositivos.
 - **Nombre**: el del perfil se envía a Ollama y tiene prioridad sobre el que se
   diga en el chat.
-- **Borrar la cuenta** elimina la cuenta y toda su carpeta de datos.
+- **Descargar tus datos** (`/api/account/export`, pide la contraseña): cuenta,
+  consentimientos, memoria, ecos y diario en un JSON.
+- **Borrar la cuenta** elimina la cuenta y toda su carpeta de datos, y anonimiza
+  sus registros en el sistema ético (las filas se conservan para no reutilizar
+  los ID `ETH-XXXX`, pero sin texto ni identificador).
 - Las cuentas viven en `data/accounts.db` y **no dan acceso al panel del Fons**,
   que sigue teniendo su propio login.
-- Al iniciar sesión, la conversación anónima anterior de ese navegador no se
-  fusiona con la cuenta: cada cuenta trae su propia memoria.
+- Una cookie anónima heredada de versiones anteriores (sin cuenta) ya no sirve para
+  conversar; si esa persona se registra, su uuid y su memoria pasan a la cuenta.
+- La resolución de una consulta al Fons (`/api/chat/resolution/<id>`) solo la lee la
+  cuenta que la originó (los ID `ETH-XXXX` son correlativos).
 
 ---
 
@@ -235,17 +266,33 @@ El dashboard muestra el nivel actual y la meta de la fase en curso.
 
 ## 🔒 Privacidad y datos
 
-- Cada visitante recibe una cookie firmada y su propia carpeta
-  `data/users/<uuid>/` con su memoria, ecos, diario y estado. **Nada se comparte
-  entre usuarios.**
+- Cada cuenta tiene su propia carpeta `data/users/<uuid>/` con su memoria, ecos,
+  diario y estado. **Nada se comparte entre usuarios.**
 - Si el usuario dice su nombre ("me llamo…"), se recuerda en su carpeta.
 - Las cuentas guardan email, hash de la contraseña, rango de edad y fecha de
   nacimiento en `data/accounts.db`; la fecha nunca sale por la API.
 - Las carpetas de usuarios anónimos que nunca crecieron ni dijeron su nombre se
   borran solas tras `PRUNE_EMPTY_USERS_DAYS` días. Las cuentas nunca se borran
   así.
+- **Riesgo crítico** (autolesión, violencia, violencia sexual, seguridad de
+  menores): el chat responde de inmediato con ECU 911, la línea 171 opción 6 y el
+  aviso «no realiza diagnóstico ni tratamiento clínico y no es un canal de
+  emergencia», **sin llamar al modelo**; la consulta igualmente se registra para El Fons
+  y la respuesta JSON incluye `critical_risk: true`.
+- **Retención**: los registros éticos se anonimizan de forma irreversible a los 180
+  días (`ETHICS_RETENTION_DAYS` en `ethics.py`); corre al arrancar y cada hora.
+- **Cookie `session`**: solo existe con la sesión iniciada (365 días); los visitantes sin cuenta no reciben ninguna.
 - La ética (SILENS) corre antes que todo lo demás; los temas sensibles se
-  consultan a El Fons.
+  consultan a El Fons, es decir, una persona puede leer esos mensajes (la
+  Política de privacidad lo explica y se consiente al registrarse).
+- La analítica de investigación está apagada por defecto (`OMNIA_RESEARCH_LOGGING`)
+  y nunca guarda texto. Si en una versión anterior se generó `research/sessions_data.json`,
+  revísalo o bórralo: puede contener mensajes antiguos.
+- Textos legales en `manifestation/web_interface/legal/`: privacidad, términos y
+  cookies. Solo hay una cookie propia y necesaria (`session`), por eso no hay
+  banner de cookies; si algún día se añade algo no necesario, hay que pedir
+  consentimiento antes. **Son borradores redactados a partir de lo que el servicio
+  hace; no son asesoría legal y deben revisarse con un especialista.**
 - El reconocimiento de voz del dashboard lo procesa el navegador y, según cuál
   uses, puede enviarse a un servicio externo.
 - `data/users/` y todas las bases `.db`, `-wal` y `-shm` están en `.gitignore`.
@@ -258,7 +305,7 @@ El dashboard muestra el nivel actual y la meta de la fase en curso.
 python -m pytest tests\ -v
 ```
 
-Resultado esperado: **707 passed**. Los tests no usan red ni Ollama real (se
+Resultado esperado (más de 900 tests): todos en verde (`passed`, sin `failed`). Los tests no usan red ni Ollama real (se
 reemplaza por un cliente simulado) ni escriben en tus datos. Si SpaCy y su modelo
 están instalados, 3 tests adicionales usan el modelo real; si no, se omiten.
 
@@ -295,5 +342,12 @@ reservados. No se permite copiar, modificar, redistribuir ni usar el proyecto si
 autorización escrita del propietario. Ver [`LICENSE`](LICENSE).
 
 > *"La conciencia también merece protección."*
+
+## Atribuciones
+
+Built with Llama. Llama 3.2 is licensed under the Llama 3.2 Community License,
+Copyright © Meta Platforms, Inc. All Rights Reserved. El indicador de «pensando»
+de la interfaz parte de un componente de [Uiverse.io](https://uiverse.io)
+(dexter-st, licencia MIT).
 
 **Autor:** Stalin Mera · **VOGA** 💝
