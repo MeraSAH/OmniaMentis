@@ -40,6 +40,8 @@ def route_or_none(
     user_id: str,
     consciousness_level: float,
     session_id: str,
+    age_band: str = "",
+    data_store: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Intenta enrutar el mensaje a un modulo especializado.
@@ -50,13 +52,32 @@ def route_or_none(
         autorizacion elevada que no se concedio -- el dict trae
         auth_required=True para que quien llama pueda informar al
         usuario, en vez de caer en silencio al core conversacional.
+        Dict tambien (con age_restricted=True) si el modulo que atenderia
+        el mensaje no esta permitido para el rango de edad de la cuenta
+        (politica en router/policy.py; age_band vacio = sin acceso).
     """
     context = OmniaContext(
         user_id=user_id,
         consciousness_level=consciousness_level,
         session_id=session_id,
+        age_band=age_band,
+        data_store=data_store,
     )
     result = _router.route(user_message, context)
+
+    # Caso 0: el modulo ganador no esta permitido para este rango de edad.
+    if result.age_restricted_module:
+        return {
+            "response": (
+                f"Esa función ({result.age_restricted_module}) todavía no está "
+                "disponible para tu rango de edad en OmniaMentis. "
+                "Puedo seguir acompañándote conversando."
+            ),
+            "module": result.age_restricted_module,
+            "data": None,
+            "auth_required": False,
+            "age_restricted": True,
+        }
 
     # Caso 1: el router bloqueo por auth elevada faltante
     if result.auth_required_but_missing:
@@ -67,11 +88,13 @@ def route_or_none(
         return {
             "response": (
                 "🔒 Este módulo requiere verificación de identidad. "
-                "Por favor, completa la verificación elevada para continuar."
+                "Abre Corporal en el panel de módulos y envía tus documentos: "
+                "cuando una persona los revise podrás continuar."
             ),
             "module": blocked_name,
             "data": None,
             "auth_required": True,
+            "age_restricted": False,
         }
 
     # Caso 2: ningun modulo aplica -- core conversacional sigue su flujo
@@ -85,6 +108,13 @@ def route_or_none(
         "module": module_response.module_name,
         "data": module_response.data,
         "auth_required": False,
+        "age_restricted": False,
+        # Widget para la interfaz (p. ej. aura_pulse de OmniaHabits, focus_timer de
+        # OmniaChronos); None si el modulo no pide ninguno.
+        "widget": (
+            {"type": module_response.widget_type, "payload": module_response.widget_payload}
+            if module_response.widget_type else None
+        ),
     }
 
 

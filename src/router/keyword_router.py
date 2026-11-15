@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import Callable, List, Optional, Type
 
 from .modules.base_module import OmniaModule, OmniaContext, ModuleResponse
+from .policy import MODULE_MIN_AGE_BAND, module_allowed
 from .modules.nutrivida import NutriVidaModule
 from .modules.omnia_athletics import OmniaAthleticsModule
 from .modules.corporal_verified import CorporalVerifiedModule
@@ -107,6 +108,9 @@ class RoutingResult:
     module_response: Optional[ModuleResponse]
     scores: dict
     auth_required_but_missing: bool = False
+    # Nombre del modulo que habria atendido el mensaje pero NO esta permitido
+    # para el rango de edad de la cuenta. should_route=False en ese caso.
+    age_restricted_module: Optional[str] = None
 
 
 class KeywordRouter:
@@ -141,6 +145,8 @@ class KeywordRouter:
         """
         self.threshold = threshold
         self.auth_checker = auth_checker
+        # Copia por instancia de la politica de edad (router/policy.py).
+        self.policy = dict(MODULE_MIN_AGE_BAND)
         self.modules: List[OmniaModule] = [cls() for cls in MODULE_REGISTRY]
 
     def route(self, message: str, context: OmniaContext) -> RoutingResult:
@@ -176,6 +182,19 @@ class KeywordRouter:
                 should_route=False,
                 module_response=None,
                 scores=scores,
+            )
+
+        # GATE DE EDAD — el motor decide quien puede usar cada modulo (los
+        # modulos no deciden nada). Va ANTES del gate de autorizacion elevada
+        # y ANTES de handle(). Modulo sin regla o rango desconocido = denegado.
+        # Si el mejor modulo esta restringido NO se reencamina a otro de menor
+        # puntaje: se informa la restriccion.
+        if not module_allowed(best_module.name, context.age_band, self.policy):
+            return RoutingResult(
+                should_route=False,
+                module_response=None,
+                scores=scores,
+                age_restricted_module=best_module.name,
             )
 
         # GATE DE AUTORIZACIÓN ELEVADA — no negociable. Si el módulo

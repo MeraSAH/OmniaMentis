@@ -7,7 +7,7 @@
 * DEPENDENCIAS: hashlib, hmac, base64, os, time (stdlib — sin C
 *            extensions, ver decisión de diseño abajo)
 * CREADO: 2026-06-30
-* ÚLTIMA MODIFICACIÓN: 2026-06-30
+* ÚLTIMA MODIFICACIÓN: 2026-10-20
 * ESTADO: Producción
 *
 * DECISIÓN DE DISEÑO: se evita bcrypt/argon2 deliberadamente. Este
@@ -22,17 +22,42 @@
 * Los tokens de sesión son stateless (autocontenidos y firmados): no
 * requieren una tabla de sesiones en base de datos, lo cual es
 * apropiado para un panel de administración de un único operador.
+*
+* CAMBIO 2026-10-20: REVISORES CON NOMBRE. Antes había UNA contraseña compartida:
+* quien la tuviera era "el Fons" sin rastro de quién decidió y sin poder retirar el
+* acceso a una persona. Ahora cada revisor tiene su propia contraseña
+* (FONS_OPERATORS="ana:<hash>,luis:<hash>") y el token lleva su nombre
+* ("fons.ana"). El modo anterior (FONS_PASSWORD_HASH, token "fons") sigue
+* funcionando como el revisor "fons". Quitar a alguien de FONS_OPERATORS invalida
+* su token (el servidor comprueba en cada petición que siga en la lista que cargó
+* al arrancar: el cambio rige al reiniciar el servidor; además el token vence a las 8 h).
 """
 
 import base64
 import hashlib
 import hmac
 import os
+import re
 import time
-from typing import Optional
+from typing import Dict, Optional
 
 PBKDF2_ITERATIONS: int = 200_000
 SALT_BYTES: int = 16
+LEGACY_OPERATOR = "fons"
+OPERATOR_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
+_HASH_RE = re.compile(r"^[A-Za-z0-9+/=]{40,200}$")
+
+
+def parse_operators(raw: Optional[str]) -> Dict[str, str]:
+    """'ana:<hash>,luis:<hash>' -> {'ana': hash, 'luis': hash}. Ignora entradas mal
+    formadas (nombre invalido, hash que no parece base64, repetidos: gana el primero)."""
+    out: Dict[str, str] = {}
+    for item in (raw or "").split(","):
+        name, sep, stored = item.strip().partition(":")
+        name, stored = name.strip(), stored.strip()
+        if sep and OPERATOR_RE.match(name) and _HASH_RE.match(stored) and name not in out:
+            out[name] = stored
+    return out
 
 
 def hash_password(password: str, salt: Optional[bytes] = None) -> str:
@@ -88,7 +113,8 @@ def verify_password(password: str, stored_hash: str) -> bool:
         return False
 
 
-def create_session_token(secret_key: str, ttl_seconds: int = 8 * 3600) -> str:
+def create_session_token(secret_key: str, ttl_seconds: int = 8 * 3600,
+                         operator: Optional[str] = None) -> str:
     """
     Crea un token de sesión firmado con HMAC-SHA256 y expiración
     autocontenida (stateless).
@@ -101,12 +127,18 @@ def create_session_token(secret_key: str, ttl_seconds: int = 8 * 3600) -> str:
         str: token opaco codificado en base64 URL-safe.
 
     Raises:
-        ValueError: Si secret_key está vacío.
+        ValueError: Si secret_key está vacío o el nombre de revisor no es válido.
     """
     if not secret_key:
         raise ValueError("secret_key no puede estar vacío")
+    if operator is None or operator == LEGACY_OPERATOR:
+        prefix = "fons"
+    elif isinstance(operator, str) and OPERATOR_RE.match(operator):
+        prefix = f"fons.{operator}"
+    else:
+        raise ValueError("Nombre de revisor no válido")
     expiry = int(time.time()) + ttl_seconds
-    payload = f"fons:{expiry}"
+    payload = f"{prefix}:{expiry}"
     signature = hmac.new(
         secret_key.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
     ).hexdigest()
@@ -114,28 +146,23 @@ def create_session_token(secret_key: str, ttl_seconds: int = 8 * 3600) -> str:
     return base64.urlsafe_b64encode(token_raw.encode("utf-8")).decode("ascii")
 
 
-def verify_session_token(token: str, secret_key: str) -> bool:
-    """
-    Verifica un token de sesión: firma HMAC válida y no expirado.
-
-    Args:
-        token: Token devuelto por create_session_token().
-        secret_key: Misma clave secreta usada para firmarlo.
-
-    Returns:
-        bool: True si el token es válido y no ha expirado. False ante
-            cualquier error de formato o firma inválida (fail-closed).
-    """
+def token_operator(token: str, secret_key: str) -> Optional[str]:
+    """Nombre del revisor dueño de un token valido (firma correcta y sin vencer),
+    o None. El token legado 'fons' devuelve 'fons'."""
     if not token or not secret_key:
-        return False
+        return None
     try:
         raw = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
         parts = raw.split(":")
         if len(parts) != 3:
-            return False
+            return None
         prefix, expiry_str, signature = parts
-        if prefix != "fons":
-            return False
+        if prefix == "fons":
+            operator = LEGACY_OPERATOR
+        elif prefix.startswith("fons.") and OPERATOR_RE.match(prefix[5:]):
+            operator = prefix[5:]
+        else:
+            return None
 
         payload = f"{prefix}:{expiry_str}"
         expected_signature = hmac.new(
@@ -143,11 +170,19 @@ def verify_session_token(token: str, secret_key: str) -> bool:
         ).hexdigest()
 
         if not hmac.compare_digest(signature, expected_signature):
-            return False
+            return None
 
         if int(expiry_str) < int(time.time()):
-            return False
+            return None
 
-        return True
+        return operator
     except (ValueError, TypeError, UnicodeDecodeError):
-        return False
+        return None
+
+
+def verify_session_token(token: str, secret_key: str) -> bool:
+    """
+    Verifica un token de sesión: firma HMAC válida y no expirado.
+    False ante cualquier error de formato o firma inválida (fail-closed).
+    """
+    return token_operator(token, secret_key) is not None

@@ -5,7 +5,7 @@
 * DEPENDENCIAS: src/router/modules/base_module.py
 * CREADO: 2026-06-19
 * ÚLTIMA MODIFICACIÓN: 2026-06-19
-* ESTADO: Producción (routing) / Stub funcional (dominio no integrado)
+* ESTADO: Producción (routing); la medición del dispositivo vive en el dashboard (cliente)
 *
 * NOTA DE NOMENCLATURA: OmniaCore (módulo de optimización de hardware)
 * es distinto de OmniaMentis (núcleo de IA conversacional). El primero
@@ -46,17 +46,14 @@ class OmniaCoreModule(OmniaModule):
 
     def handle(self, message: str, context: OmniaContext) -> ModuleResponse:
         text = (
-            "💻 Detecté una petición de optimización de hardware o "
-            "rendimiento del dispositivo.\n\n"
-            "OmniaCore (detección de capacidad de hardware, suspensión "
-            "de animaciones en memoria activa, delegación a microservicios "
-            "para mantener 60 FPS constantes) es un proyecto independiente "
-            "aún no integrado.\n\n"
-            "♋ Cuando esté activo, analizaré los recursos de tu "
-            "dispositivo y optimizaré el renderizado automáticamente."
+            "💻 OmniaCore vive en tu pantalla, no en el servidor: el servidor no puede ver tu dispositivo.\n\n"
+            "Ábrelo en ▦ MÓDULOS → OmniaCore: mide los núcleos, la memoria y los FPS reales de tu navegador, "
+            "te da un nivel (alto, medio o ahorro) y reduce animaciones y desenfoques si tu equipo va justo. "
+            "Puedes elegir el modo a mano.\n\n"
+            "Todavía no existe la delegación de cálculos a microservicios (Edge/Cloud)."
         )
         return ModuleResponse(
             text=text,
             module_name=self.name,
-            data={"status": "not_integrated", "domain": "hardware_optimization"},
+            data={"status": "client_side", "domain": "hardware_optimization"},
         )

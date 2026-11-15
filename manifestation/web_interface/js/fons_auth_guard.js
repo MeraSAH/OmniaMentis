@@ -57,6 +57,7 @@
   }
 
   function defaultApiUrl() {
+    if (location.pathname.startsWith('/app/')) return location.origin;   // servido por Flask: mismo origen
     // Mismo host con el que se abrió la página; file:// u otro dominio -> 127.0.0.1.
     const h = location.hostname;
     const loopback = (h === 'localhost' || h === '127.0.0.1');

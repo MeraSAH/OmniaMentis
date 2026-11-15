@@ -50,6 +50,7 @@ def context():
         user_id="test_user",
         consciousness_level=0.05,
         session_id="test_session",
+        age_band="adult",
     )
 
 
@@ -297,6 +298,7 @@ class TestIntegrationLayer:
             user_id="u1",
             consciousness_level=0.05,
             session_id="s1",
+            age_band="adult",
         )
         assert result is None
 
@@ -306,6 +308,7 @@ class TestIntegrationLayer:
             user_id="u1",
             consciousness_level=0.05,
             session_id="s1",
+            age_band="adult",
         )
         assert result is not None
         assert "response" in result
@@ -331,6 +334,7 @@ class TestIntegrationLayer:
             user_id="u1",
             consciousness_level=0.05,
             session_id="s1",
+            age_band="adult",
         )
         assert result is not None
         assert result["auth_required"] is True
@@ -348,6 +352,7 @@ class TestIntegrationLayer:
                 user_id="u1",
                 consciousness_level=0.05,
                 session_id="s1",
+                age_band="adult",
             )
             assert result is not None
             assert result["auth_required"] is False
@@ -367,6 +372,7 @@ class TestIntegrationLayer:
             user_id="u1",
             consciousness_level=0.05,
             session_id="s1",
+            age_band="adult",
         )
         assert result["auth_required"] is True
 
@@ -393,6 +399,7 @@ class TestElevatedAuthGate:
     def test_sensitive_module_blocked_without_auth_checker(self, context):
         router = KeywordRouter()
         router.modules.append(_FakeSensitiveModule())
+        router.policy["FakeSensitive"] = "minor"
 
         result = router.route("dato sensible ficticio", context)
 
@@ -403,6 +410,7 @@ class TestElevatedAuthGate:
     def test_sensitive_module_blocked_when_checker_denies(self, context):
         router = KeywordRouter(auth_checker=lambda ctx: False)
         router.modules.append(_FakeSensitiveModule())
+        router.policy["FakeSensitive"] = "minor"
 
         result = router.route("dato sensible ficticio", context)
 
@@ -412,6 +420,7 @@ class TestElevatedAuthGate:
     def test_sensitive_module_allowed_when_checker_approves(self, context):
         router = KeywordRouter(auth_checker=lambda ctx: True)
         router.modules.append(_FakeSensitiveModule())
+        router.policy["FakeSensitive"] = "minor"
 
         result = router.route("dato sensible ficticio", context)
 
@@ -446,6 +455,7 @@ class TestElevatedAuthGate:
 
         router = KeywordRouter(auth_checker=spy_checker)
         router.modules.append(_FakeSensitiveModule())
+        router.policy["FakeSensitive"] = "minor"
         router.route("dato sensible ficticio", context)
 
         assert received["context"] is context

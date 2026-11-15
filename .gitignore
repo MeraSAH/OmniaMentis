@@ -336,7 +336,6 @@ yarn.lock
 # ===== MANTENER ESTRUCTURA =====
 # Archivos .gitkeep para mantener carpetas vacías
 !.gitkeep
-!**/.gitkeep*.CORRUPTO_BACKUP
 .env.backup*
 .env.*.bak
 
@@ -353,3 +352,8 @@ data/users/
 *.db-shm
 *.migrated
 *.corrupt-*
+
+# Verificación de adultos (Corporal): NUNCA subir cédulas ni fotos al repositorio
+data/verification_files/
+data/verification.db*
+data/fons_audit.jsonl*

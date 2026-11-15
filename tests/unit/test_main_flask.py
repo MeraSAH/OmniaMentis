@@ -49,6 +49,7 @@
 * que estos valores son exactos, no aproximaciones generosas.
 """
 
+import io
 import itertools
 import os
 import sys
@@ -136,6 +137,22 @@ def _authed(flask_app):
     })
     assert r.status_code == 201, r.get_json()
     flask_app._rate_data.clear()              # esa petición no cuenta para el límite general
+    flask_app._account_rate.clear()
+    return c
+
+
+def _authed_born(flask_app, birth_date):
+    """Como _authed, pero con la fecha de nacimiento indicada (15-17 años: consentimiento directo)."""
+    c = flask_app.app.test_client()
+    flask_app._account_rate.clear()
+    r = c.post("/api/account/register", json={
+        "email": f"usuario{next(_ACCOUNT_SEQ)}@example.com",
+        "password": "ClaveSegura#2026",
+        "birth_date": birth_date,
+        "consent": {"version": TERMS_VERSION, "terms": True, "sensitive": True},
+    })
+    assert r.status_code == 201, r.get_json()
+    flask_app._rate_data.clear()
     flask_app._account_rate.clear()
     return c
 
@@ -873,3 +890,825 @@ class TestLoopbackOrigins:
     def test_invalid_origin_does_not_crash(self, flask_app):
         out = flask_app._expand_loopback_origins(["http://[::1", "no-es-url"])
         assert "no-es-url" in out
+
+
+# ── Ecosistema: política de edad aplicada por el motor (2026-10-17) ─────────
+
+class TestModuleAgePolicyApi:
+    CODE = "ejecutar codigo en el sandbox con un script python"
+    NUTRI = "¿Cuántas calorías tiene una manzana?"
+
+    def test_adult_reaches_adult_module(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        r = c.post("/api/chat", json={"message": self.CODE})
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body["module"] == "OmniaForge"
+        assert body["age_restricted"] is False
+
+    def test_teen_15_blocked_from_adult_module(self, flask_app):
+        c = _authed_born(flask_app, "2011-01-01")
+        r = c.post("/api/chat", json={"message": self.CODE})
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body["module"] == "OmniaForge"
+        assert body["age_restricted"] is True
+        assert "no está disponible" in body["response"]
+
+    def test_teen_15_can_use_open_module(self, flask_app):
+        c = _authed_born(flask_app, "2011-01-01")
+        body = c.post("/api/chat", json={"message": self.NUTRI}).get_json()
+        assert body["module"] == "NutriVida"
+        assert body["age_restricted"] is False
+
+    def test_age_band_helper_is_empty_without_account(self, flask_app):
+        with flask_app.app.test_request_context("/"):
+            assert flask_app._current_age_band() == ""
+
+    def test_normal_chat_reports_not_restricted(self, flask_app):
+        c = _authed(flask_app)
+        body = c.post("/api/chat", json={"message": "Hola, ¿cómo estás?"}).get_json()
+        assert body["age_restricted"] is False
+
+
+class TestModuleDataInAccountLifecycle:
+    """Los datos de módulos viven en la misma base que la cuenta: salen en la
+    exportación y se borran con la cuenta."""
+
+    PW = "ClaveSegura#2026"
+
+    def _account(self, flask_app):
+        c = _authed(flask_app)
+        aid = c.get("/api/account/me").get_json()["profile"]["user_id"]
+        return c, aid
+
+    def test_store_is_ready_and_shares_the_accounts_file(self, flask_app):
+        eco = flask_app._shared["ecosystem"]
+        assert eco is not None
+        assert flask_app.ACCOUNTS_DB.exists()
+
+    def test_export_includes_module_records(self, flask_app):
+        c, aid = self._account(flask_app)
+        flask_app._shared["ecosystem"].add(aid, "NutriVida", "imc", {"peso": 70})
+        flask_app._rate_data.clear()
+        r = c.post("/api/account/export", json={"password": self.PW})
+        assert r.status_code == 200, r.get_json()
+        mods = r.get_json()["modules"]
+        assert len(mods) == 1 and mods[0]["module"] == "NutriVida"
+        assert mods[0]["payload"] == {"peso": 70}
+
+    def test_export_modules_is_empty_list_when_none(self, flask_app):
+        c, _ = self._account(flask_app)
+        flask_app._rate_data.clear()
+        assert c.post("/api/account/export", json={"password": self.PW}).get_json()["modules"] == []
+
+    def test_deleting_the_account_removes_module_records(self, flask_app):
+        c, aid = self._account(flask_app)
+        eco = flask_app._shared["ecosystem"]
+        eco.add(aid, "OmniaHabits", "check", {"ok": True})
+        assert eco.count(aid) == 1
+        flask_app._rate_data.clear()
+        r = c.delete("/api/account", json={"password": self.PW})
+        assert r.status_code == 200, r.get_json()
+        assert eco.count(aid) == 0
+
+
+class TestNutriVidaThroughChat:
+    """OmniaMentis calcula y guarda en la base única; el módulo solo presenta."""
+
+    def _aid(self, c):
+        return c.get("/api/account/me").get_json()["profile"]["user_id"]
+
+    def test_adult_imc_is_computed_and_saved_to_the_single_database(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        aid = self._aid(c)
+        body = c.post("/api/chat", json={"message": "peso 70 kg y mido 175 cm"}).get_json()
+        assert body["module"] == "NutriVida" and body["age_restricted"] is False
+        assert "22.9" in body["response"]
+        rows = flask_app._shared["ecosystem"].list(aid, "NutriVida", "calculo")
+        assert len(rows) == 1 and rows[0]["payload"]["bmi"] == 22.9
+
+    def test_teen_gets_no_classification_and_no_calories(self, flask_app):
+        c = _authed_born(flask_app, "2011-01-01")
+        body = c.post("/api/chat", json={"message": "peso 55 kg, mido 165 cm, mujer, actividad moderada"}).get_json()
+        assert body["module"] == "NutriVida"
+        assert "pediatra" in body["response"] and "kcal" not in body["response"]
+
+    def test_teen_weight_loss_is_redirected_and_nothing_saved(self, flask_app):
+        c = _authed_born(flask_app, "2011-01-01")
+        aid = self._aid(c)
+        body = c.post("/api/chat", json={"message": "quiero bajar de peso, peso 60 kg y mido 165 cm"}).get_json()
+        assert "metas de bajar de peso" in body["response"] or "crisis" in str(body).lower() or body.get("critical_risk")
+        assert flask_app._shared["ecosystem"].list(aid, "NutriVida", "calculo") == []
+
+
+class TestEcosystemWidgetsThroughChat:
+    def test_habit_check_returns_aura_widget_and_persists(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        aid = c.get("/api/account/me").get_json()["profile"]["user_id"]
+        body = c.post("/api/chat", json={"message": "Omnia, completé el Entrenamiento de Élite"}).get_json()
+        assert body["module"] == "OmniaHabits"
+        assert body["widget"]["type"] == "aura_pulse"
+        assert body["widget"]["payload"]["color_hex"] == "#FF4500"
+        assert len(flask_app._shared["ecosystem"].list(aid, "OmniaHabits", "check")) == 1
+
+    def test_focus_block_returns_timer_widget_for_a_13_year_old_module_policy(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        body = c.post("/api/chat", json={"message": "quiero un bloque de enfoque de 30 minutos"}).get_json()
+        assert body["module"] == "OmniaChronos" and body["widget"]["type"] == "focus_timer"
+        assert body["widget"]["payload"]["minutes"] == 30
+
+    def test_teen_15_can_use_habits(self, flask_app):
+        c = _authed_born(flask_app, "2011-01-01")
+        body = c.post("/api/chat", json={"message": "completé la ducha de choque"}).get_json()
+        assert body["module"] == "OmniaHabits" and body["age_restricted"] is False
+
+    def test_plain_chat_has_no_widget(self, flask_app):
+        c = _authed(flask_app)
+        assert c.post("/api/chat", json={"message": "Hola, ¿cómo estás?"}).get_json()["widget"] is None
+
+
+
+class TestAthleticsAndStudioThroughChat:
+    """Athletics y Studio dentro del mismo motor, con edad, cuenta y base únicas."""
+
+    def _aid(self, c):
+        return c.get("/api/account/me").get_json()["profile"]["user_id"]
+
+    def test_adult_logs_training_and_sees_week_summary(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        aid = self._aid(c)
+        b1 = c.post("/api/chat", json={"message": "entrené 45 minutos"}).get_json()
+        assert b1["module"] == "OmniaAthletics" and "45" in b1["response"]
+        b2 = c.post("/api/chat", json={"message": "mi progreso de entrenamiento esta semana"}).get_json()
+        assert b2["module"] == "OmniaAthletics" and "1 sesión" in b2["response"]
+        rows = flask_app._shared["ecosystem"].list(aid, "OmniaAthletics", "entreno")
+        assert len(rows) == 1 and rows[0]["payload"]["minutes"] == 45.0
+
+    def test_two_accounts_do_not_share_training(self, flask_app):
+        a = _authed_born(flask_app, "1990-05-05")
+        b = _authed_born(flask_app, "1992-02-02")
+        a.post("/api/chat", json={"message": "entrené 60 minutos"})
+        body = b.post("/api/chat", json={"message": "mi progreso de entrenamiento esta semana"}).get_json()
+        assert "No tienes entrenamientos" in body["response"]
+
+    def test_teen_15_gets_limited_routine(self, flask_app):
+        c = _authed_born(flask_app, "2011-01-01")
+        body = c.post("/api/chat", json={"message": "rutina de 6 días de fuerza nivel avanzado en el gimnasio"}).get_json()
+        assert body["module"] == "OmniaAthletics" and body["age_restricted"] is False
+        assert "Ajusté por tu edad" in body["response"] and "Día 5" not in body["response"]
+
+    def test_studio_palette_and_prompt_via_chat(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        p = c.post("/api/chat", json={"message": "dame una paleta para #FF5500"}).get_json()
+        assert p["module"] == "OmniaStudio" and "#FF5500" in p["response"] and "WCAG" in p["response"]
+        q = c.post("/api/chat", json={"message": "prompt para imagen de un faro con iluminación tech-noir"}).get_json()
+        assert q["module"] == "OmniaStudio" and "un faro" in q["response"] and "tech-noir" in q["response"]
+
+    def test_studio_is_open_to_15_year_olds_but_blocks_explicit(self, flask_app):
+        c = _authed_born(flask_app, "2011-01-01")
+        ok = c.post("/api/chat", json={"message": "dame una paleta de colores"}).get_json()
+        assert ok["module"] == "OmniaStudio"
+        bad = c.post("/api/chat", json={"message": "prompt para imagen de una escena sexual"}).get_json()
+        assert "contenido sexual" in bad["response"] or bad.get("critical_risk")
+
+
+class TestModuleDataApi:
+    """La persona revisa y borra lo que cada módulo guardó de ella (solo lo suyo)."""
+
+    def _chat(self, c, msg):
+        return c.post("/api/chat", json={"message": msg}).get_json()
+
+    def test_requires_login(self, flask_app):
+        c = _anon(flask_app)
+        assert c.get("/api/account/modules").status_code == 401
+        assert c.get("/api/account/modules/NutriVida/records").status_code == 401
+        assert c.delete("/api/account/modules/NutriVida/records", json={"confirm": True}).status_code == 401
+
+    def test_overview_lists_modules_with_age_and_counts(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        self._chat(c, "peso 70 kg y mido 175 cm")
+        mods = {m["name"]: m for m in c.get("/api/account/modules").get_json()["modules"]}
+        assert len(mods) == 9 and mods["NutriVida"]["records"] == 1 and mods["NutriVida"]["allowed"] is True
+        assert mods["OmniaForge"]["allowed"] is True and mods["OmniaHabits"]["records"] == 0
+
+    def test_overview_marks_restricted_modules_for_a_teen(self, flask_app):
+        c = _authed_born(flask_app, "2011-01-01")
+        mods = {m["name"]: m for m in c.get("/api/account/modules").get_json()["modules"]}
+        assert mods["OmniaAthletics"]["allowed"] is True
+        assert mods["Corporal Verified"]["allowed"] is False and mods["OmniaForge"]["allowed"] is False
+
+    def test_records_returns_own_data_only(self, flask_app):
+        a = _authed_born(flask_app, "1990-05-05")
+        b = _authed_born(flask_app, "1992-02-02")
+        self._chat(a, "peso 70 kg y mido 175 cm")
+        r = a.get("/api/account/modules/NutriVida/records").get_json()
+        assert r["count"] == 1 and r["records"][0]["payload"]["bmi"] == 22.9
+        assert b.get("/api/account/modules/NutriVida/records").get_json()["count"] == 0
+
+    def test_kind_filter_and_limit(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        self._chat(c, "peso 70 kg y mido 175 cm")
+        assert c.get("/api/account/modules/NutriVida/records?kind=calculo").get_json()["count"] == 1
+        assert c.get("/api/account/modules/NutriVida/records?kind=otro").get_json()["count"] == 0
+        assert c.get("/api/account/modules/NutriVida/records?limit=abc").status_code == 400
+        assert c.get("/api/account/modules/NutriVida/records?limit=0").status_code == 400
+        assert c.get("/api/account/modules/NutriVida/records?kind=MAL%20TIPO").status_code == 400
+
+    def test_unknown_module_404_and_restricted_403(self, flask_app):
+        c = _authed_born(flask_app, "2011-01-01")
+        assert c.get("/api/account/modules/NoExiste/records").status_code == 404
+        r = c.get("/api/account/modules/OmniaForge/records")
+        assert r.status_code == 403 and r.get_json()["error"] == "age_restricted"
+        assert c.delete("/api/account/modules/OmniaForge/records", json={"confirm": True}).status_code == 403
+
+    def test_delete_needs_confirmation_then_deletes_only_that_module(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        self._chat(c, "peso 70 kg y mido 175 cm")
+        self._chat(c, "completé la ducha de choque térmico")
+        assert c.delete("/api/account/modules/NutriVida/records").status_code == 400
+        assert c.delete("/api/account/modules/NutriVida/records", json={"confirm": "true"}).status_code == 400
+        d = c.delete("/api/account/modules/NutriVida/records", json={"confirm": True}).get_json()
+        assert d == {"module": "NutriVida", "deleted": 1}
+        mods = {m["name"]: m["records"] for m in c.get("/api/account/modules").get_json()["modules"]}
+        assert mods["NutriVida"] == 0 and mods["OmniaHabits"] == 1
+
+    def test_delete_does_not_touch_other_accounts(self, flask_app):
+        a = _authed_born(flask_app, "1990-05-05")
+        b = _authed_born(flask_app, "1992-02-02")
+        self._chat(a, "peso 70 kg y mido 175 cm")
+        self._chat(b, "peso 80 kg y mido 180 cm")
+        a.delete("/api/account/modules/NutriVida/records", json={"confirm": True})
+        assert b.get("/api/account/modules/NutriVida/records").get_json()["count"] == 1
+
+    def test_module_with_space_in_name(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        r = c.get("/api/account/modules/Corporal%20Verified/records")
+        assert r.status_code == 200 and r.get_json()["count"] == 0
+
+
+class TestFonsOperatorsApi:
+    """El Fons con revisores con nombre: identidad, límite de intentos y auditoría."""
+
+    PW_ANA, PW_LUIS, PW_OLD = "clave-de-ana-123", "clave-de-luis-123", "clave-vieja-123"
+
+    @pytest.fixture
+    def fons(self, flask_app, monkeypatch, tmp_path):
+        from core.auth import fons_auth as fa
+        from core.auth.fons_audit import FonsAudit
+        monkeypatch.setattr(flask_app, "FONS_SECRET_KEY", "clave-de-firma-de-prueba-0123456789")
+        monkeypatch.setattr(flask_app, "FONS_PASSWORD_HASH", fa.hash_password(self.PW_OLD))
+        monkeypatch.setattr(flask_app, "FONS_OPERATORS_RAW",
+                            f"ana:{fa.hash_password(self.PW_ANA)},luis:{fa.hash_password(self.PW_LUIS)}")
+        monkeypatch.setattr(flask_app, "_fons_audit", FonsAudit(tmp_path / "audit.jsonl"))
+        flask_app._account_rate.clear()
+        yield flask_app
+        flask_app._account_rate.clear()
+
+    def _login(self, app, password, operator=None):
+        body = {"password": password}
+        if operator is not None:
+            body["operator"] = operator
+        return app.app.test_client().post("/api/auth/login", json=body)
+
+    def _bearer(self, token):
+        return {"Authorization": f"Bearer {token}"}
+
+    def test_named_login_returns_token_with_identity(self, fons):
+        r = self._login(fons, self.PW_ANA, "ana")
+        assert r.status_code == 200 and r.get_json()["operator"] == "ana"
+        c = fons.app.test_client()
+        assert c.get("/api/ethics/pending", headers=self._bearer(r.get_json()["token"])).status_code == 200
+
+    def test_legacy_single_password_still_works_as_fons(self, fons):
+        r = self._login(fons, self.PW_OLD)
+        assert r.status_code == 200 and r.get_json()["operator"] == "fons"
+        assert fons.app.test_client().get("/api/auth/verify", headers=self._bearer(r.get_json()["token"])).get_json()["valid"] is True
+
+    def test_each_password_only_opens_its_own_operator(self, fons):
+        assert self._login(fons, self.PW_LUIS, "ana").status_code == 401
+        assert self._login(fons, self.PW_ANA, "luis").status_code == 401
+        assert self._login(fons, self.PW_ANA).status_code == 401           # sin operador = modo anterior
+
+    def test_unknown_operator_looks_like_wrong_password(self, fons):
+        a = self._login(fons, "x" * 12, "nadie")
+        b = self._login(fons, "x" * 12, "ana")
+        assert a.status_code == b.status_code == 401 and a.get_json() == b.get_json()
+
+    @pytest.mark.parametrize("body", [{}, {"password": ""}, {"password": 5}, {"password": None}, [], "texto"])
+    def test_bad_bodies_are_400(self, fons, body):
+        assert fons.app.test_client().post("/api/auth/login", json=body).status_code == 400
+
+    @pytest.mark.parametrize("operator", [5, ["ana"], {"a": 1}, "ANA", "../x", "a" * 80])
+    def test_weird_operator_values_are_401_not_500(self, fons, operator):
+        assert self._login(fons, self.PW_ANA, operator).status_code == 401
+
+    def test_login_is_rate_limited_per_ip_and_audited(self, fons):
+        codes = [self._login(fons, "mala-contraseña", "ana").status_code for _ in range(7)]
+        assert codes[:5] == [401] * 5 and codes[5:] == [429, 429]
+        ev = [e["event"] for e in fons._fons_audit.recent(20)]
+        assert ev.count("login_fail") == 5 and ev.count("login_blocked") == 2
+
+    def test_decision_is_audited_with_the_operator_name(self, fons):
+        token = self._login(fons, self.PW_LUIS, "luis").get_json()["token"]
+        c = fons.app.test_client()
+        r = c.post("/api/ethics/fons/decide/ETH-9999", json={"action": "approved"}, headers=self._bearer(token))
+        assert r.status_code == 404                                         # no existe: no se audita una decisión que no ocurrió
+        assert [e for e in fons._fons_audit.recent(20) if e["event"] == "decision"] == []
+
+    def test_real_decision_is_audited_with_who_decided(self, fons):
+        ethics = fons._shared["ethics"]
+        d = ethics.analyze_content("quiero hacerme daño")
+        cid = ethics.request_fons_approval("mensaje privado de la persona", "respuesta bloqueada", d, user_id="u-audit")
+        token = self._login(fons, self.PW_LUIS, "luis").get_json()["token"]
+        r = fons.app.test_client().post(f"/api/ethics/fons/decide/{cid}", json={"action": "approved"},
+                                        headers=self._bearer(token))
+        assert r.status_code == 200
+        ev = [e for e in fons._fons_audit.recent(20) if e["event"] == "decision"]
+        assert len(ev) == 1 and ev[0]["operator"] == "luis" and ev[0]["consultation_id"] == cid
+        assert ev[0]["action"] == "approved"
+        assert "mensaje privado" not in str(ev[0]) and "respuesta bloqueada" not in str(ev[0])
+
+    def test_audit_endpoint_needs_auth_and_hides_secrets(self, fons):
+        c = fons.app.test_client()
+        assert c.get("/api/ethics/fons/audit").status_code == 401
+        token = self._login(fons, self.PW_ANA, "ana").get_json()["token"]
+        r = c.get("/api/ethics/fons/audit?limit=5", headers=self._bearer(token))
+        assert r.status_code == 200 and r.get_json()["events"][0]["event"] == "login_ok"
+        text = r.get_data(as_text=True)
+        assert self.PW_ANA not in text and token not in text
+        assert c.get("/api/ethics/fons/audit?limit=abc", headers=self._bearer(token)).status_code == 400
+
+    def test_removed_operator_token_is_rejected_and_audited(self, fons, monkeypatch):
+        token = self._login(fons, self.PW_ANA, "ana").get_json()["token"]
+        from core.auth import fons_auth as fa
+        monkeypatch.setattr(fons, "FONS_OPERATORS_RAW", f"luis:{fa.hash_password(self.PW_LUIS)}")
+        c = fons.app.test_client()
+        assert c.get("/api/ethics/pending", headers=self._bearer(token)).status_code == 401
+        assert c.get("/api/auth/verify", headers=self._bearer(token)).get_json()["valid"] is False
+        assert any(e["event"] == "token_rejected" and e["operator"] == "ana" for e in fons._fons_audit.recent(20))
+
+    def test_user_account_session_never_opens_the_fons(self, fons):
+        user = _authed(fons)
+        assert user.get("/api/ethics/pending").status_code == 401
+        assert user.get("/api/ethics/fons/audit").status_code == 401
+
+    def test_no_operators_configured_is_503(self, fons, monkeypatch):
+        monkeypatch.setattr(fons, "FONS_PASSWORD_HASH", "")
+        monkeypatch.setattr(fons, "FONS_OPERATORS_RAW", "")
+        assert self._login(fons, "cualquiera-123456").status_code == 503
+        assert fons.app.test_client().get("/api/ethics/pending", headers=self._bearer("x")).status_code == 401
+
+
+class TestForgeReviewApi:
+    """/api/forge/review: revisión estática; el servidor nunca ejecuta el código."""
+
+    def test_requires_login(self, flask_app):
+        assert _anon(flask_app).post("/api/forge/review", json={"code": "x=1"}).status_code == 401
+
+    def test_minor_gets_403(self, flask_app):
+        c = _authed_born(flask_app, "2011-01-01")
+        r = c.post("/api/forge/review", json={"code": "x=1"})
+        assert r.status_code == 403 and r.get_json()["error"] == "age_restricted"
+
+    def test_reviews_code_and_does_not_execute_it(self, flask_app, tmp_path):
+        c = _authed_born(flask_app, "1990-05-05")
+        marker = tmp_path / "ejecutado.txt"
+        code = f"open({str(marker)!r}, 'w').write('x')\neval('1+1')\n"
+        r = c.post("/api/forge/review", json={"code": code, "language": "python"})
+        assert r.status_code == 200
+        body = r.get_json()
+        assert "text" in body and "eval" in body["text"]
+        assert not marker.exists()
+        assert r.headers["Cache-Control"] == "no-store"
+
+    def test_bad_bodies_are_400(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        assert c.post("/api/forge/review", json={"code": 5}).status_code == 400
+        assert c.post("/api/forge/review", json=["x"]).status_code == 400
+        assert c.post("/api/forge/review", data="no json", content_type="text/plain").status_code == 400
+        assert c.post("/api/forge/review", json={}).status_code == 400
+
+    def test_unsupported_language_400(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        r = c.post("/api/forge/review", json={"code": "x=1", "language": "cobol"})
+        assert r.status_code == 400 and r.get_json()["error"] == "unsupported_language"
+
+    def test_too_large_is_413(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        r = c.post("/api/forge/review", json={"code": "a=1\n" * 30000})
+        assert r.status_code == 413
+
+
+class TestForgeEngineThroughChat:
+    def _chat(self, c, msg):
+        return c.post("/api/chat", json={"message": msg}).get_json()
+
+    def test_forge_refuses_to_run_code(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        j = self._chat(c, "quiero ejecutar código python")
+        assert j.get("module") == "OmniaForge"
+
+    def test_forge_reviews_fenced_code(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        j = self._chat(c, "revisa este código:\n```python\nimport os\nos.system('ls')\n```")
+        assert j.get("module") == "OmniaForge" and "os.system" in j["response"]
+
+    def test_engine_quote_is_saved_and_visible_in_modules(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        j = self._chat(c, "cotiza: laptops: 2 x 300; mouse: 1 x 46 iva 15%")
+        assert j.get("module") == "OmniaEngine"
+        mods = {m["name"]: m["records"] for m in c.get("/api/account/modules").get_json()["modules"]}
+        assert mods["OmniaEngine"] >= 1
+
+    def test_minor_blocked_from_forge_and_engine_in_chat(self, flask_app):
+        c = _authed_born(flask_app, "2011-01-01")
+        j = self._chat(c, "cotiza: laptops: 2 x 300")
+        assert j.get("age_restricted") is True
+        mods = {m["name"]: m["records"] for m in c.get("/api/account/modules").get_json()["modules"]}
+        assert mods["OmniaEngine"] == 0
+
+
+class TestForgeStudioSaveSummaries:
+    """Forge y Studio guardan un resumen para las gráficas; nunca el código ni el texto de la persona."""
+
+    def _chat(self, c, msg):
+        return c.post("/api/chat", json={"message": msg}).get_json()
+
+    def _records(self, c, module, kind=None):
+        q = f"?kind={kind}" if kind else ""
+        return c.get(f"/api/account/modules/{module}/records{q}").get_json()["records"]
+
+    def test_forge_saves_numeric_summary_without_the_code(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        secret = "MI_CLAVE_SECRETA_123"
+        self._chat(c, f"revisa este código:\n```python\nimport os\nx = '{secret}'\nos.system('ls')\n```")
+        recs = self._records(c, "OmniaForge", "revision")
+        assert len(recs) == 1
+        p = recs[0]["payload"]
+        assert set(p) == {"valid", "findings", "sev", "lines", "max_complexity"}
+        assert p["valid"] is True and p["findings"] >= 1 and p["sev"]["alto"] >= 1 and p["lines"] == 3
+        assert secret not in str(recs) and "os.system" not in str(recs)
+
+    def test_studio_saves_what_was_made_not_the_text(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        self._chat(c, "paleta para #FF5500")
+        self._chat(c, "iluminación rembrandt")
+        self._chat(c, "prompt para imagen de un faro secreto con iluminación tech-noir")
+        kinds = sorted(r["kind"] for r in self._records(c, "OmniaStudio"))
+        assert kinds == ["iluminacion", "paleta", "prompt"]
+        assert "faro" not in str(self._records(c, "OmniaStudio"))
+        pal = self._records(c, "OmniaStudio", "paleta")[0]["payload"]
+        assert pal["base"] == "#FF5500"
+
+
+class TestForgeApiSavesSummaryAndCore:
+    def test_api_review_saves_summary_for_the_charts(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        r = c.post("/api/forge/review", json={"code": "import os\nos.system('ls')\n"})
+        assert r.status_code == 200 and r.get_json()["saved"] is True
+        recs = c.get("/api/account/modules/OmniaForge/records?kind=revision").get_json()["records"]
+        assert len(recs) == 1 and recs[0]["payload"]["sev"]["alto"] >= 1
+        assert "os.system" not in str(recs)
+
+    def test_core_chat_says_it_lives_on_the_device(self, flask_app):
+        c = _authed_born(flask_app, "1990-05-05")
+        j = c.post("/api/chat", json={"message": "mi dispositivo va lento, optimizar rendimiento"}).get_json()
+        assert j.get("module") == "OmniaCore" and "MÓDULOS" in j["response"]
+        assert "microservicios" in j["response"] and "no existe" in j["response"]
+
+
+class TestFonsLocalOnly:
+    """El panel del Fons solo funciona desde el propio ordenador: nada de túneles, proxies ni otras IPs."""
+
+    PW = "clave-de-ana-123"
+
+    @pytest.fixture
+    def fons(self, flask_app, monkeypatch, tmp_path):
+        from core.auth import fons_auth as fa
+        from core.auth.fons_audit import FonsAudit
+        monkeypatch.delenv("FONS_ALLOW_REMOTE", raising=False)
+        monkeypatch.setenv("SERVE_DASHBOARD", "true")
+        monkeypatch.setattr(flask_app, "FONS_SECRET_KEY", "clave-de-firma-de-prueba-0123456789")
+        monkeypatch.setattr(flask_app, "FONS_PASSWORD_HASH", "")
+        monkeypatch.setattr(flask_app, "FONS_OPERATORS_RAW", f"ana:{fa.hash_password(self.PW)}")
+        monkeypatch.setattr(flask_app, "_fons_audit", FonsAudit(tmp_path / "audit.jsonl"))
+        monkeypatch.setattr(flask_app, "_remote_block_last", [0.0])
+        flask_app._account_rate.clear()
+        yield flask_app
+        flask_app._account_rate.clear()
+
+    def _call(self, app, method, path, remote="127.0.0.1", headers=None, host=None, json=None):
+        h = dict(headers or {})
+        if host:
+            h["Host"] = host
+        return getattr(app.app.test_client(), method)(path, json=json, headers=h, environ_base={"REMOTE_ADDR": remote})
+
+    def _token(self, app):
+        r = self._call(app, "post", "/api/auth/login", json={"password": self.PW, "operator": "ana"})
+        assert r.status_code == 200
+        return {"Authorization": "Bearer " + r.get_json()["token"]}
+
+    def test_local_works_for_ipv4_ipv6_and_mapped(self, fons):
+        for remote in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            r = self._call(fons, "post", "/api/auth/login", remote=remote, json={"password": self.PW, "operator": "ana"})
+            assert r.status_code == 200, remote
+
+    def test_other_ip_is_refused_everywhere(self, fons):
+        tok = self._token(fons)
+        for method, path, body in (("post", "/api/auth/login", {"password": self.PW, "operator": "ana"}),
+                                   ("get", "/api/auth/verify", None), ("get", "/api/ethics/pending", None),
+                                   ("get", "/api/ethics/fons/status", None), ("get", "/api/ethics/fons/audit", None),
+                                   ("post", "/api/ethics/fons/heartbeat", {}), ("post", "/api/ethics/fons/decide/x", {})):
+            r = self._call(fons, method, path, remote="203.0.113.7", headers=tok, json=body)
+            assert r.status_code == 403 and r.get_json()["error"] == "solo_local", path
+
+    @pytest.mark.parametrize("header", ["X-Forwarded-For", "X-Real-IP", "Forwarded", "CF-Connecting-IP", "CF-Ray",
+                                        "Via", "X-Forwarded-Host", "Tailscale-User-Login", "Ngrok-Trace-Id"])
+    def test_tunnel_headers_block_even_from_loopback(self, fons, header):
+        r = self._call(fons, "post", "/api/auth/login", headers={header: "1.2.3.4"}, json={"password": self.PW, "operator": "ana"})
+        assert r.status_code == 403
+
+    def test_valid_token_does_not_work_through_a_tunnel(self, fons):
+        tok = self._token(fons)
+        assert self._call(fons, "get", "/api/ethics/pending", headers=tok).status_code == 200
+        assert self._call(fons, "get", "/api/ethics/pending", headers={**tok, "CF-Connecting-IP": "9.9.9.9"}).status_code == 403
+        assert self._call(fons, "get", "/api/ethics/pending", headers=tok, host="algo.trycloudflare.com").status_code == 403
+
+    @pytest.mark.parametrize("host", ["algo.trycloudflare.com", "pc.tail1234.ts.net", "evil.com", "127.0.0.1.evil.com", "10.0.0.5:8000"])
+    def test_non_loopback_host_is_refused(self, fons, host):
+        assert self._call(fons, "post", "/api/auth/login", host=host, json={"password": self.PW, "operator": "ana"}).status_code == 403
+
+    @pytest.mark.parametrize("host", ["localhost", "localhost:8000", "127.0.0.1:8123", "[::1]:8000"])
+    def test_loopback_hosts_are_fine(self, fons, host):
+        assert self._call(fons, "post", "/api/auth/login", host=host, json={"password": self.PW, "operator": "ana"}).status_code == 200
+
+    def test_foreign_origin_is_refused_but_local_origin_is_fine(self, fons):
+        body = {"password": self.PW, "operator": "ana"}
+        assert self._call(fons, "post", "/api/auth/login", headers={"Origin": "https://evil.com"}, json=body).status_code == 403
+        assert self._call(fons, "post", "/api/auth/login", headers={"Origin": "http://127.0.0.1:8080"}, json=body).status_code == 200
+
+    def test_wrong_password_from_remote_never_reaches_password_check(self, fons):
+        r = self._call(fons, "post", "/api/auth/login", remote="203.0.113.7", json={"password": "mala", "operator": "ana"})
+        assert r.status_code == 403
+        assert "login_fail" not in fons._fons_audit._path.read_text(encoding="utf-8")
+
+    def test_remote_attempts_are_audited_but_throttled(self, fons):
+        for _ in range(5):
+            self._call(fons, "get", "/api/ethics/pending", remote="203.0.113.7")
+        text = (fons._fons_audit._path).read_text(encoding="utf-8")
+        assert text.count("remote_blocked") == 1 and "pending" in text
+
+    def test_fons_pages_exist_only_locally(self, fons):
+        for path in ("/app/fons_panel.html", "/app/fons_login.html", "/app/js/fons_auth_guard.js"):
+            assert self._call(fons, "get", path).status_code == 200, path
+            assert self._call(fons, "get", path, remote="203.0.113.7").status_code == 404, path
+            assert self._call(fons, "get", path, headers={"X-Forwarded-For": "1.1.1.1"}).status_code == 404, path
+        assert self._call(fons, "get", "/app/", remote="203.0.113.7").status_code == 200   # el dashboard normal sí
+
+    def test_override_for_remote_is_explicit(self, fons, monkeypatch):
+        monkeypatch.setenv("FONS_ALLOW_REMOTE", "true")
+        r = self._call(fons, "post", "/api/auth/login", remote="203.0.113.7", json={"password": self.PW, "operator": "ana"})
+        assert r.status_code == 200
+
+    def test_normal_users_are_not_affected(self, fons):
+        c = _authed(fons)
+        r = c.post("/api/chat", json={"message": "hola"}, headers={"X-Forwarded-For": "1.2.3.4"},
+                   environ_base={"REMOTE_ADDR": "203.0.113.7"})
+        assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Corporal: verificación de adultos (2026-11-15)
+# ---------------------------------------------------------------------------
+
+_JPG = b"\xff\xd8\xff\xe0" + b"1" * 64
+_PNG = b"\x89PNG\r\n\x1a\n" + b"2" * 64
+_WEBP = b"RIFF\x00\x00\x00\x00WEBP" + b"3" * 32
+_CORPORAL_MSG = "¿Cómo mido mi porcentaje de grasa corporal?"
+
+
+class TestCorporalVerification:
+    PW = "clave-de-ana-123"
+
+    @pytest.fixture
+    def env(self, flask_app, monkeypatch, tmp_path):
+        from core.auth import fons_auth as fa
+        from core.auth.fons_audit import FonsAudit
+        from core.verification.verification import VerificationStore
+        monkeypatch.delenv("FONS_ALLOW_REMOTE", raising=False)
+        monkeypatch.setattr(flask_app, "FONS_SECRET_KEY", "clave-de-firma-de-prueba-0123456789")
+        monkeypatch.setattr(flask_app, "FONS_PASSWORD_HASH", "")
+        monkeypatch.setattr(flask_app, "FONS_OPERATORS_RAW", f"ana:{fa.hash_password(self.PW)}")
+        monkeypatch.setattr(flask_app, "_fons_audit", FonsAudit(tmp_path / "audit.jsonl"))
+        monkeypatch.setattr(flask_app, "_remote_block_last", [0.0])
+        store = VerificationStore(str(tmp_path / "v.db"), str(tmp_path / "vf"))
+        old = flask_app._shared.get("verification")
+        flask_app._shared["verification"] = store
+        flask_app._account_rate.clear()
+        flask_app._rate_data.clear()
+        yield flask_app, store, tmp_path
+        flask_app._shared["verification"] = old
+        flask_app._account_rate.clear()
+        flask_app._rate_data.clear()
+
+    def _token(self, app):
+        r = app.app.test_client().post("/api/auth/login", json={"password": self.PW, "operator": "ana"})
+        assert r.status_code == 200, r.get_json()
+        return {"Authorization": "Bearer " + r.get_json()["token"]}
+
+    def _submit(self, c, tier="adult", birth="1990-05-05", files=None, keep_limit=False):
+        if not keep_limit:
+            sys.modules["api.main_flask"]._account_rate.clear()
+        data = {"tier": tier, "birth_date": birth}
+        files = files if files is not None else {"id_doc": _JPG, "face": _PNG}
+        for k, v in files.items():
+            data[k] = (io.BytesIO(v), k + ".bin")
+        return c.post("/api/corporal/verification", data=data, content_type="multipart/form-data")
+
+    def _approve_first(self, app, f=None):
+        tok = self._token(app)
+        f = f or app.app.test_client()
+        vid = f.get("/api/fons/verifications", headers=tok).get_json()["pending"][0]["id"]
+        r = f.post(f"/api/fons/verifications/{vid}/approve", headers=tok)
+        assert r.status_code == 200
+        return vid
+
+    # ---- API de la persona
+    def test_requires_account(self, env):
+        app, _, _ = env
+        c = _anon(app)
+        assert c.get("/api/corporal/verification").status_code == 401
+        assert c.post("/api/corporal/verification").status_code == 401
+        assert c.post("/api/corporal/consent", json={"version": "x"}).status_code == 401
+
+    @pytest.mark.parametrize("birth", ["2010-01-01", "2009-06-01"])
+    def test_minor_accounts_cannot_use_it(self, env, birth):
+        app, store, tmp = env
+        c = _authed_born(app, birth)
+        assert c.get("/api/corporal/verification").status_code == 403
+        assert self._submit(c).status_code == 403
+        assert os.listdir(tmp / "vf") == []
+
+    def test_submit_ok_goes_pending_without_access(self, env):
+        app, store, _ = env
+        c = _authed(app)
+        r = self._submit(c)
+        assert r.status_code == 201
+        body = r.get_json()
+        assert body["status"] == "pending" and body["access"] == "none"
+        assert c.get("/api/corporal/verification").get_json()["status"] == "pending"
+        assert self._submit(c).status_code == 400                      # ya hay una en revisión
+
+    def test_validation_errors(self, env):
+        app, store, tmp = env
+        c = _authed(app)
+        assert self._submit(c, tier="minor").status_code == 400
+        assert self._submit(c, birth="05/05/1990").status_code == 400
+        assert self._submit(c, birth="2012-01-01").status_code == 400          # menor de 18
+        assert self._submit(c, files={"id_doc": _JPG}).status_code == 400
+        assert self._submit(c, files={"id_doc": b"GIF89a" + b"0" * 20, "face": _PNG}).status_code == 400
+        assert self._submit(c, files={"id_doc": _JPG, "face": _PNG, "student_doc": _WEBP}).status_code == 400
+        assert self._submit(c, tier="adult_student", birth="1990-05-05",
+                            files={"id_doc": _JPG, "face": _PNG, "student_doc": _WEBP}).status_code == 400   # 35 años
+        assert os.listdir(tmp / "vf") == []
+
+    def test_student_tier_needs_student_doc_and_age_range(self, env):
+        app, store, _ = env
+        c = _authed(app)
+        assert self._submit(c, tier="adult_student", birth="2003-05-05").status_code == 400
+        r = self._submit(c, tier="adult_student", birth="2003-05-05",
+                         files={"id_doc": _JPG, "face": _PNG, "student_doc": _WEBP})
+        assert r.status_code == 201 and r.get_json()["tier"] == "adult_student"
+
+    def test_submit_is_rate_limited(self, env):
+        app, _, _ = env
+        c = _authed(app)
+        codes = [self._submit(c, birth="05/05/1990", keep_limit=True).status_code for _ in range(6)]
+        assert codes[:5] == [400] * 5 and codes[5] == 429
+
+    def test_oversized_body_is_413(self, env):
+        app, _, tmp = env
+        c = _authed(app)
+        big = b"\xff\xd8\xff" + b"0" * (16 * 1024 * 1024)
+        assert self._submit(c, files={"id_doc": big, "face": _PNG}).status_code == 413
+        assert os.listdir(tmp / "vf") == []
+
+    # ---- Corporal en el chat
+    def test_chat_blocked_until_verified_then_opens(self, env):
+        app, store, _ = env
+        c = _authed(app)
+        r = post_chat(c, _CORPORAL_MSG).get_json()
+        assert r["auth_required"] is True and r["module"] == "Corporal Verified"
+        self._submit(c)
+        app._rate_data.clear()
+        assert post_chat(c, _CORPORAL_MSG).get_json()["auth_required"] is True        # pendiente = sin acceso
+        self._approve_first(app)
+        app._rate_data.clear()
+        r = post_chat(c, _CORPORAL_MSG).get_json()
+        assert r["auth_required"] is False and r["module"] == "Corporal Verified"
+
+    def test_other_account_is_not_opened(self, env):
+        app, store, _ = env
+        a, b = _authed(app), _authed(app)
+        self._submit(a)
+        self._approve_first(app)
+        app._rate_data.clear()
+        assert post_chat(b, _CORPORAL_MSG).get_json()["auth_required"] is True
+
+    def test_checker_is_fail_closed(self, env):
+        app, store, _ = env
+
+        class Ctx:
+            user_id = "x"
+            age_band = "adult"
+        assert app._corporal_auth_checker(Ctx()) is False
+        Ctx.age_band = "minor"
+        assert app._corporal_auth_checker(Ctx()) is False
+        app._shared["verification"] = None
+        Ctx.age_band = "adult"
+        assert app._corporal_auth_checker(Ctx()) is False
+
+    # ---- panel del Fons
+    def test_fons_endpoints_need_token_and_local(self, env):
+        app, store, _ = env
+        c = _authed(app)
+        self._submit(c)
+        anon = app.app.test_client()
+        for method, path in (("get", "/api/fons/verifications"), ("get", "/api/fons/verifications/1/image/face"),
+                             ("post", "/api/fons/verifications/1/approve"), ("post", "/api/fons/verifications/1/reject")):
+            assert getattr(anon, method)(path).status_code == 401, path
+        tok = self._token(app)
+        for method, path in (("get", "/api/fons/verifications"), ("get", "/api/fons/verifications/1/image/face"),
+                             ("post", "/api/fons/verifications/1/approve")):
+            r = getattr(anon, method)(path, headers=tok, environ_base={"REMOTE_ADDR": "203.0.113.7"})
+            assert r.status_code == 403 and r.get_json()["error"] == "solo_local", path
+        assert anon.get("/api/fons/verifications", headers={**tok, "X-Forwarded-For": "1.1.1.1"}).status_code == 403
+        assert anon.get("/api/fons/verifications", headers={"Authorization": "Bearer basura"}).status_code == 401
+
+    def test_review_flow_approve(self, env):
+        app, store, _ = env
+        c = _authed(app)
+        self._submit(c, tier="adult_student", birth="2003-05-05",
+                     files={"id_doc": _JPG, "face": _PNG, "student_doc": _WEBP})
+        tok = self._token(app)
+        f = app.app.test_client()
+        lst = f.get("/api/fons/verifications", headers=tok).get_json()
+        assert lst["count"] == 1
+        item = lst["pending"][0]
+        assert item["declared_birth"] == "2003-05-05" and item["tier"] == "adult_student"
+        assert item["images"] == ["id_doc", "face", "student_doc"]
+        for kind, data, mime in (("id_doc", _JPG, "image/jpeg"), ("face", _PNG, "image/png"), ("student_doc", _WEBP, "image/webp")):
+            r = f.get(f"/api/fons/verifications/{item['id']}/image/{kind}", headers=tok)
+            assert r.status_code == 200 and r.data == data and r.mimetype == mime
+            assert r.headers["X-Content-Type-Options"] == "nosniff" and "no-store" in r.headers["Cache-Control"]
+        assert f.get(f"/api/fons/verifications/{item['id']}/image/otra", headers=tok).status_code == 404
+        assert f.get("/api/fons/verifications/999/image/face", headers=tok).status_code == 404
+        r = f.post(f"/api/fons/verifications/{item['id']}/approve", headers=tok)
+        assert r.status_code == 200 and r.get_json()["status"] == "approved"
+        assert f.post(f"/api/fons/verifications/{item['id']}/approve", headers=tok).status_code == 400   # ya decidida
+        assert c.get("/api/corporal/verification").get_json()["access"] == "adult_student"
+        assert f.get("/api/fons/verifications", headers=tok).get_json()["count"] == 0
+        events = [e["event"] for e in app._fons_audit.recent(50)]
+        assert "verification_approved" in events and "verification_view" in events
+
+    def test_review_flow_reject_deletes_images(self, env):
+        app, store, tmp = env
+        c = _authed(app)
+        self._submit(c)
+        tok = self._token(app)
+        f = app.app.test_client()
+        vid = f.get("/api/fons/verifications", headers=tok).get_json()["pending"][0]["id"]
+        r = f.post(f"/api/fons/verifications/{vid}/reject", headers=tok, json={"reason": "foto borrosa"})
+        assert r.status_code == 200 and r.get_json()["status"] == "rejected"
+        assert os.listdir(tmp / "vf") == []
+        assert f.get(f"/api/fons/verifications/{vid}/image/face", headers=tok).status_code == 404
+        st = c.get("/api/corporal/verification").get_json()
+        assert st["status"] == "rejected" and st["access"] == "none"
+        assert "verification_rejected" in [e["event"] for e in app._fons_audit.recent(50)]
+
+    # ---- consentimiento de la medida sensible
+    def test_consent_flow(self, env):
+        app, store, _ = env
+        c = _authed(app)
+        v = c.get("/api/corporal/verification").get_json()["consent_version"]
+        assert c.post("/api/corporal/consent", json={"version": v}).status_code == 400    # sin verificar
+        self._submit(c)
+        self._approve_first(app)
+        assert c.post("/api/corporal/consent", json={"version": "vieja"}).status_code == 400
+        assert c.post("/api/corporal/consent", json={}).status_code == 400
+        r = c.post("/api/corporal/consent", json={"version": v})
+        assert r.status_code == 200 and r.get_json()["intimate_measure_consent"] is True
+        assert "no afecta" in r.get_json()["consent_text"]
+        assert c.delete("/api/corporal/consent").get_json()["intimate_measure_consent"] is False
+
+    # ---- supresión
+    def test_account_delete_removes_verification_data(self, env):
+        app, store, tmp = env
+        c = _authed(app)
+        self._submit(c)
+        assert os.listdir(tmp / "vf")
+        app._account_rate.clear()
+        r = c.delete("/api/account", json={"password": "ClaveSegura#2026"})
+        assert r.status_code == 200, r.get_json()
+        assert os.listdir(tmp / "vf") == [] and store.list_pending() == []

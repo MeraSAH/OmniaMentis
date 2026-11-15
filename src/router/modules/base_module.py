@@ -6,7 +6,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, List, Optional
 
 
 @dataclass
@@ -56,3 +56,10 @@ class OmniaContext:
     consciousness_level: float
     session_id: str
     recent_messages: List[str] = field(default_factory=list)
+    # Rango de edad de la cuenta ("minor", "minor_basic", "adult"). Lo pone el
+    # motor desde la cuenta; vacio = desconocido = el router lo trata como
+    # SIN acceso a ningun modulo (fail-closed). Ver router/policy.py.
+    age_band: str = ""
+    # Almacen unico de datos de modulos (EcosystemStore) o None. Lo entrega el
+    # motor; el modulo no abre bases propias. Sin almacen, calcula pero no guarda.
+    data_store: Optional[Any] = None
