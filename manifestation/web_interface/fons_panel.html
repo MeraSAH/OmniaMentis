@@ -430,6 +430,14 @@ html, body {
         <div>Cargando consultas pendientes...</div>
       </div>
     </div>
+
+    <div class="section-title" style="margin-top:26px;">
+      <span>verificaciones de adultos (corporal)</span>
+      <span class="pending-count" id="verifCount">0</span>
+    </div>
+    <div id="verifList">
+      <div class="empty-state"><div class="big">⏳</div><div>Cargando verificaciones...</div></div>
+    </div>
   </section>
 
   <aside class="side-panel">
@@ -455,6 +463,7 @@ html, body {
 // pero con la MISMA prioridad de claves (fons_api_url > omnia_api_url)
 // para evitar que ambos mecanismos queden desincronizados.
 function defaultApiUrl() {
+  if (location.pathname.startsWith('/app/')) return location.origin;   // servido por Flask: mismo origen
   const h = location.hostname;
   const loopback = (h === 'localhost' || h === '127.0.0.1');
   return `http://${loopback ? h : '127.0.0.1'}:8000`;
@@ -683,10 +692,123 @@ $('recidSearchBtn').addEventListener('click', async () => {
   }
 });
 
+// ==================== VERIFICACIONES DE ADULTOS (CORPORAL) ====================
+// Revisas a mano: cédula + rostro (+ documento universitario). Compara la fecha de nacimiento declarada con la
+// del documento y la cara con la cédula. Aprobar o rechazar borra las imágenes según la política (24 h / al instante).
+const VERIF_LABELS = { id_doc: 'Cédula / documento', face: 'Rostro', student_doc: 'Documento universitario' };
+const VERIF_TIERS = { adult: 'Adulto', adult_student: 'Adulto estudiante (18–25)' };
+let verifKey = null;
+let verifUrls = [];
+
+function verifClear() {
+  verifUrls.forEach(u => URL.revokeObjectURL(u));
+  verifUrls = [];
+  $('verifList').textContent = '';
+}
+
+function verifEmpty(icon, text) {
+  const box = document.createElement('div');
+  box.className = 'empty-state';
+  const big = document.createElement('div'); big.className = 'big'; big.textContent = icon;
+  const t = document.createElement('div'); t.textContent = text;
+  box.append(big, t);
+  return box;
+}
+
+async function verifImage(id, kind, img) {
+  try {
+    const r = await fonsFetch(`/api/fons/verifications/${id}/image/${kind}`);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const url = URL.createObjectURL(await r.blob());
+    verifUrls.push(url);
+    img.src = url;
+  } catch (e) {
+    img.alt = 'No se pudo cargar la imagen';
+  }
+}
+
+async function verifDecide(id, action, reason) {
+  try {
+    const r = await fonsFetch(`/api/fons/verifications/${id}/${action}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: reason || '' }),
+    });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.message || d.error || 'HTTP ' + r.status); }
+    syslog(`Verificación ${id} → ${action === 'approve' ? 'APROBADA' : 'RECHAZADA'}`, 'ok');
+    verifKey = null;
+    await loadVerifications();
+  } catch (e) {
+    syslog(`Error en verificación ${id}: ${e.message}`, 'err');
+    alert('No se pudo registrar la decisión: ' + e.message);
+  }
+}
+
+function verifCard(it) {
+  const card = document.createElement('div');
+  card.className = 'consultation-card risk-low';
+  const head = document.createElement('div');
+  const strong = document.createElement('b');
+  strong.textContent = `#${it.id} · ${VERIF_TIERS[it.tier] || it.tier}`;
+  head.appendChild(strong);
+  card.appendChild(head);
+  const info = document.createElement('div');
+  info.textContent = `Nombre en la cuenta: ${it.display_name || '(sin nombre)'} · Nació (declarado): ${it.declared_birth || '?'} · Enviada: ${new Date(it.created_at).toLocaleString()} · Se borra sola: ${new Date(it.expires_at).toLocaleDateString()}`;
+  info.style.cssText = 'font-size:12px;margin:6px 0;';
+  card.appendChild(info);
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;margin:8px 0;';
+  for (const kind of it.images) {
+    const fig = document.createElement('figure');
+    fig.style.cssText = 'margin:0;max-width:210px;';
+    const img = document.createElement('img');
+    img.style.cssText = 'max-width:210px;max-height:210px;border:1px solid var(--border);border-radius:4px;cursor:zoom-in;display:block;';
+    img.alt = VERIF_LABELS[kind] || kind;
+    img.addEventListener('click', () => { if (img.src) window.open(img.src, '_blank', 'noopener'); });
+    const cap = document.createElement('figcaption');
+    cap.textContent = VERIF_LABELS[kind] || kind;
+    cap.style.cssText = 'font-size:11px;color:var(--text-dim);';
+    fig.append(img, cap);
+    row.appendChild(fig);
+    verifImage(it.id, kind, img);
+  }
+  card.appendChild(row);
+  const acts = document.createElement('div');
+  acts.style.cssText = 'display:flex;gap:8px;';
+  const ok = document.createElement('button'); ok.type = 'button'; ok.textContent = 'APROBAR';
+  const no = document.createElement('button'); no.type = 'button'; no.textContent = 'RECHAZAR';
+  for (const b of [ok, no]) b.style.cssText = 'background:transparent;border:1px solid var(--border);color:var(--text);border-radius:4px;padding:6px 12px;cursor:pointer;font-family:inherit;font-size:11px;';
+  ok.addEventListener('click', () => { if (confirm(`¿Aprobar la verificación #${it.id}? Confirma que cédula, rostro y edad coinciden.`)) verifDecide(it.id, 'approve'); });
+  no.addEventListener('click', () => { const why = prompt('Motivo del rechazo (opcional):'); if (why !== null) verifDecide(it.id, 'reject', why); });
+  acts.append(ok, no);
+  card.appendChild(acts);
+  return card;
+}
+
+async function loadVerifications() {
+  try {
+    const r = await fonsFetch('/api/fons/verifications');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    const items = d.pending || [];
+    $('verifCount').textContent = items.length;
+    const key = items.map(i => i.id).join(',');
+    if (key === verifKey) return;          // sin cambios: no recargar imágenes (cada vista queda en la bitácora)
+    verifKey = key;
+    verifClear();
+    if (!items.length) { $('verifList').appendChild(verifEmpty('✅', 'No hay verificaciones pendientes')); return; }
+    items.forEach(it => $('verifList').appendChild(verifCard(it)));
+  } catch (e) {
+    verifKey = null;
+    syslog(`Error cargando verificaciones: ${e.message}`, 'err');
+    verifClear();
+    $('verifList').appendChild(verifEmpty('⚠', 'No se pudo cargar'));
+  }
+}
+
 // ==================== BOOT ====================
 async function refreshAll() {
   await checkFonsStatus();
   await loadQueue();
+  await loadVerifications();
 }
 
 refreshAll();

@@ -9,6 +9,10 @@
 * CREADO: 2026-06-14
 * ÚLTIMA MODIFICACIÓN: 2026-10-14
 *
+* CAMBIO 2026-10-17 -- ECOSISTEMA: el router de modulos recibe el rango de edad
+*   de la cuenta (age_band) y aplica router/policy.py ANTES de invocar ningun
+*   modulo. Los modulos no deciden nada: el motor decide. La respuesta de
+*   /api/chat incluye "age_restricted".
 * CAMBIO 2026-10-15 -- CUENTA OBLIGATORIA PARA CONVERSAR: /api/chat,
 *   /api/empathy/subtype, /api/consciousness, /api/consciousness/dimensions,
 *   /api/memory/echoes y /api/chat/resolution/<id> responden 401
@@ -199,6 +203,7 @@ import re
 import shutil
 import threading
 from pathlib import Path
+import ipaddress
 from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -209,7 +214,8 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
 
-from flask import Flask, request, jsonify, Response, session, has_request_context
+from flask import Flask, request, jsonify, Response, session, has_request_context, g, send_from_directory
+from werkzeug.exceptions import NotFound
 from flask.sessions import SecureCookieSessionInterface
 from flask_cors import CORS
 
@@ -223,7 +229,9 @@ from core.logging.logger_setup import get_logger, setup_logging
 from core.llm.ollama_client import OllamaClient, OllamaUnavailableError
 from core.mind.spacy_intent import SpaCyIntentClassifier
 from dotenv import load_dotenv
-from core.auth.fons_auth import verify_password, verify_session_token, create_session_token
+from core.auth.fons_auth import (verify_password, verify_session_token, create_session_token,
+                                 token_operator, parse_operators, hash_password, LEGACY_OPERATOR, OPERATOR_RE)
+from core.auth.fons_audit import FonsAudit
 from core.auth.accounts import (
     TERMS_VERSION,
     AccountStore, AccountError, InvalidEmail, WeakPassword, EmailTaken,
@@ -233,9 +241,14 @@ from core.auth.accounts import (
     GuardianResendTooSoon, GuardianMailUnavailable,
 )
 from core.auth import guardian_mail
+from core.storage.ecosystem_store import EcosystemStore, StoreError
+from core.forge import code_review as forge_cr
 from living_memory.gestation_diary import GestationDiary
 from analytics.research_analytics import ResearchAnalytics
-from router.integration import route_or_none, get_registered_modules
+from router.integration import route_or_none, get_registered_modules, set_auth_checker
+from core.verification.verification import (VerificationStore, VerificationError, CONSENT_TEXT_VERSION,
+                                            MAX_IMAGE_BYTES, REQUIRED as _VERIF_REQUIRED)
+from router.policy import MODULE_MIN_AGE_BAND, module_allowed
 
 # ==================== LOGGING ====================
 setup_logging(log_dir=PROJECT_ROOT / "logs", level=logging.INFO, console=True)
@@ -251,6 +264,8 @@ load_dotenv(PROJECT_ROOT / ".env")
 DATA_ROOT = Path(os.environ.get("OMNIA_DATA_DIR", PROJECT_ROOT / "data"))
 USERS_DIR = DATA_ROOT / "users"
 ACCOUNTS_DB = DATA_ROOT / "accounts.db"
+VERIFICATION_DB = DATA_ROOT / "verification.db"
+VERIFICATION_DIR = DATA_ROOT / "verification_files"   # imágenes de verificación (se borran solas)
 USERS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ==================== FLASK APP ====================
@@ -350,26 +365,111 @@ CORS(app, supports_credentials=True, origins=_cors_origins)
 # con contraseña, independiente de la cookie de sesión del usuario final.
 FONS_SECRET_KEY = os.environ.get("FONS_SECRET_KEY", "")
 FONS_PASSWORD_HASH = os.environ.get("FONS_PASSWORD_HASH", "")
+# Revisores con nombre (2026-10-20): "ana:<hash>,luis:<hash>". Ver core/auth/fons_auth.py.
+FONS_OPERATORS_RAW = os.environ.get("FONS_OPERATORS", "")
+FONS_AUDIT_PATH = DATA_ROOT / "fons_audit.jsonl"
+_fons_audit = FonsAudit(FONS_AUDIT_PATH)
+# Hash de relleno: se verifica contra el cuando el revisor no existe, para que
+# "no existe" y "contraseña incorrecta" tarden lo mismo y respondan lo mismo.
+_DUMMY_FONS_HASH = hash_password("relleno-para-igualar-tiempos")
 
-if not FONS_SECRET_KEY or not FONS_PASSWORD_HASH:
+
+def _fons_operators() -> Dict[str, str]:
+    """Revisores vigentes: los de FONS_OPERATORS y, si existe, el modo anterior
+    (FONS_PASSWORD_HASH) como el revisor 'fons'. Se consulta en cada petición con
+    la lista cargada al arrancar: quitar a alguien de la lista le retira el acceso
+    al reiniciar el servidor (antes de eso su token vale hasta que venza, 8 h)."""
+    ops = parse_operators(FONS_OPERATORS_RAW)
+    if FONS_PASSWORD_HASH:
+        ops.setdefault(LEGACY_OPERATOR, FONS_PASSWORD_HASH)
+    return ops
+
+
+if not FONS_SECRET_KEY or not (FONS_PASSWORD_HASH or FONS_OPERATORS_RAW):
     logger.warning(
-        "⚠️  FONS_SECRET_KEY / FONS_PASSWORD_HASH no configurados. "
+        "⚠️  FONS_SECRET_KEY y FONS_PASSWORD_HASH (o FONS_OPERATORS) no configurados. "
         "El panel del Fons quedará inaccesible hasta ejecutar "
         "scripts/set_fons_password.py y definir esas variables de entorno."
     )
 
 
+# ---- El panel del Fons solo se usa DESDE ESTE ORDENADOR ----
+# Una petición cuenta como «local» solo si (1) llega desde la propia máquina (loopback), (2) NO trae ninguna
+# cabecera de proxy o túnel (un túnel como Cloudflare/Tailscale/ngrok conecta desde 127.0.0.1 pero siempre
+# añade alguna), (3) el Host es loopback (frena DNS rebinding y túneles que reescriben el Host) y (4) si hay
+# Origin, también es loopback. Fail-closed. FONS_ALLOW_REMOTE=true lo desactiva (no recomendado).
+_PROXY_HEADERS = ("X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Server", "X-Real-IP",
+                  "Forwarded", "Via", "CF-Connecting-IP", "CF-Ray", "CF-Visitor", "True-Client-IP", "Fly-Client-IP",
+                  "X-Original-Forwarded-For", "X-Envoy-External-Address", "Tailscale-User-Login", "Ngrok-Trace-Id")
+_remote_block_last = [0.0]
+
+
+def _is_loopback_host(value: str) -> bool:
+    host = (value or "").strip().lower()
+    if host.startswith("["):
+        host = host[1:].split("]")[0]
+    elif host.count(":") == 1:
+        host = host.split(":")[0]
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback
+
+
+def _is_local_request() -> bool:
+    if os.environ.get("FONS_ALLOW_REMOTE", "false").strip().lower() == "true":
+        return True
+    try:
+        addr = ipaddress.ip_address(request.remote_addr or "")
+        if getattr(addr, "ipv4_mapped", None):
+            addr = addr.ipv4_mapped
+        if not addr.is_loopback:
+            return False
+    except ValueError:
+        return False
+    if any(h in request.headers for h in _PROXY_HEADERS):
+        return False
+    if not _is_loopback_host(request.host):
+        return False
+    origin = request.headers.get("Origin")
+    if origin and origin != "null" and not _is_loopback_host(urlsplit(origin).netloc):
+        return False
+    return True
+
+
+def _local_only_denied():
+    """None si la petición es local; si no, 403 (y un renglón de auditoría, como mucho uno por minuto)."""
+    if _is_local_request():
+        return None
+    now = time.time()
+    if now - _remote_block_last[0] > 60:
+        _remote_block_last[0] = now
+        _fons_audit.record("remote_blocked", "", path=request.path[:80])
+    return jsonify({"error": "solo_local", "message": "El panel del Fons solo se puede usar desde el equipo del servidor."}), 403
+
+
 def require_fons_auth(view_func):
-    """Exige un token de sesión válido en Authorization: Bearer <token>.
-    Fail-closed: cualquier ausencia o error de configuración resulta en 401."""
+    """Exige un token de sesión válido en Authorization: Bearer <token> cuyo
+    revisor siga en la lista vigente. Fail-closed: cualquier ausencia o error de
+    configuración resulta en 401. Deja el nombre del revisor en g.fons_operator."""
     @wraps(view_func)
     def wrapped(*args, **kwargs):
+        denied = _local_only_denied()
+        if denied:
+            return denied
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             return jsonify({"error": "No autorizado"}), 401
         token = auth_header[len("Bearer "):]
-        if not FONS_SECRET_KEY or not verify_session_token(token, FONS_SECRET_KEY):
+        operator = token_operator(token, FONS_SECRET_KEY) if FONS_SECRET_KEY else None
+        if operator is None or operator not in _fons_operators():
+            if operator is not None:   # token firmado pero de alguien ya retirado
+                _fons_audit.record("token_rejected", operator, ip=request.remote_addr or "")
             return jsonify({"error": "Token inválido o expirado"}), 401
+        g.fons_operator = operator
         return view_func(*args, **kwargs)
     return wrapped
 
@@ -406,6 +506,13 @@ ACCOUNT_RATE_LIMITS = {
     "delete": (5, 3600),
     "guardian": (10, 600),
     "guardian_resend": (5, 3600),
+    "fons_login": (5, 900),
+    "forge_review": (30, 600),
+    "modules_read": (120, 60),
+    "modules_delete": (10, 3600),
+    "verification_submit": (5, 3600),
+    "verification_read": (60, 60),
+    "consent": (10, 3600),
 }
 _ACCOUNT_RATE_HORIZON = 3600.0
 _account_rate: Dict[str, list] = {}
@@ -501,6 +608,7 @@ _shared: Dict[str, Any] = {
     "spacy": None,
     "research": None,
     "accounts": None,
+    "ecosystem": None,
     "initialized": False,
     "start_time": time.time(),
 }
@@ -543,6 +651,18 @@ def _current_account_id() -> Optional[str]:
     if "account_id" not in session or not _account_session_valid():
         return None
     return session["account_id"]
+
+
+def _current_age_band() -> str:
+    """Rango de edad ("minor", "minor_basic", "adult") de la cuenta con sesion
+    iniciada, o "" si no se puede saber. El router de modulos trata "" como
+    SIN acceso a ningun modulo (fail-closed)."""
+    aid = _current_account_id()
+    store = _shared.get("accounts")
+    if aid is None or store is None:
+        return ""
+    profile = store.get_profile(aid)
+    return profile["age_band"] if profile else ""
 
 
 def account_required(view):
@@ -935,6 +1055,17 @@ def _get_phase(consciousness: float) -> int:
 PHASE_2_CONSCIOUSNESS_THRESHOLD = 0.15
 
 
+def _corporal_auth_checker(context) -> bool:
+    """Autorización elevada del router (Corporal): solo cuentas adultas verificadas. Fail-closed."""
+    try:
+        store = _shared.get("verification")
+        if store is None or getattr(context, "age_band", "") != "adult":
+            return False
+        return store.access_level(str(context.user_id)) != "none"
+    except Exception:
+        return False
+
+
 def initialize_shared() -> None:
     """Inicializa los componentes COMPARTIDOS entre todos los usuarios:
     ética (SILENS/Fons), cliente de Ollama y clasificador de SpaCy."""
@@ -951,6 +1082,25 @@ def initialize_shared() -> None:
     except Exception as e:
         _shared["accounts"] = None
         logger.error(f"❌ No se pudo abrir la base de cuentas: {e}. Registro/login desactivados.")
+
+    # Datos de los módulos del ecosistema: MISMA base que las cuentas.
+    _shared["ecosystem"] = None
+    if _shared["accounts"] is not None:
+        try:
+            _shared["ecosystem"] = EcosystemStore(ACCOUNTS_DB)
+            logger.info("✅ Almacén de módulos listo (misma base que las cuentas)")
+        except Exception as e:
+            logger.error(f"❌ No se pudo abrir el almacén de módulos: {e}. Los módulos no guardarán datos.")
+
+    # Verificación de adultos para Corporal (2026-11-15). Si falla, Corporal queda CERRADO (fail-closed).
+    _shared["verification"] = None
+    try:
+        _shared["verification"] = VerificationStore(str(VERIFICATION_DB), str(VERIFICATION_DIR))
+        _shared["verification"].purge_due()
+        logger.info("✅ Verificación de Corporal lista")
+    except Exception as e:
+        logger.error(f"❌ No se pudo abrir la verificación de Corporal: {e}. Corporal queda cerrado.")
+    set_auth_checker(_corporal_auth_checker)
 
     ollama_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
     _shared["ollama"] = OllamaClient(base_url=ollama_url)
@@ -1034,6 +1184,8 @@ def _start_autosave_thread() -> None:
                 save_all_sessions()
                 evict_idle_sessions()
                 _prune_rate_tables()
+                if _shared.get("verification") is not None:
+                    _shared["verification"].purge_due()
                 if tick % 60 == 0:  # una vez por hora
                     prune_empty_users()
                     run_retention()
@@ -1051,6 +1203,9 @@ def _start_autosave_thread() -> None:
 @app.before_request
 def before_request():
     if request.path in ["/", "/health", "/favicon.ico"]:
+        return None
+    # Archivos estáticos de la app (PWA / escritorio): no son llamadas a la API y no deben gastar el límite.
+    if request.path == "/app" or request.path.startswith("/app/"):
         return None
     # Los preflight de CORS (OPTIONS) no llevan datos ni hacen nada: no cuentan.
     # Si contaran, agotarían el límite y el navegador vería un error de red
@@ -1117,7 +1272,47 @@ def _handle_account_error(exc):
     return jsonify({"error": exc.code, "message": message}), status
 
 
+@app.errorhandler(VerificationError)
+def _handle_verification_error(exc):
+    return jsonify({"error": "verification_invalid", "message": str(exc)}), 400
+
+
 # ==================== ENDPOINTS ====================
+
+# ==================== APP WEB (PWA / ESCRITORIO) ====================
+# Opcional (SERVE_DASHBOARD=true): Flask sirve también el dashboard en /app/, de modo que página y API
+# comparten origen (sin CORS ni contenido mixto bajo HTTPS) y el navegador puede instalarlo como app.
+_DASHBOARD_DIR = os.path.realpath(os.environ.get("DASHBOARD_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "manifestation", "web_interface"))
+_DASHBOARD_EXT = {".html", ".js", ".css", ".png", ".svg", ".webmanifest", ".json", ".ico", ".txt"}
+
+
+def _serve_dashboard_enabled() -> bool:
+    return os.environ.get("SERVE_DASHBOARD", "false").strip().lower() == "true"
+
+
+@app.get("/app/")
+def serve_dashboard_index():
+    return serve_dashboard("omnia_dashboard.html")
+
+
+@app.get("/app/<path:filename>")
+def serve_dashboard(filename: str):
+    if not _serve_dashboard_enabled():
+        return jsonify({"error": "not_found"}), 404
+    if os.path.splitext(filename)[1].lower() not in _DASHBOARD_EXT:
+        return jsonify({"error": "not_found"}), 404
+    if filename.startswith("fons_") or filename.endswith("fons_auth_guard.js"):
+        if not _is_local_request():          # las pantallas del Fons ni siquiera existen para quien viene de fuera
+            return jsonify({"error": "not_found"}), 404
+    try:
+        resp = send_from_directory(_DASHBOARD_DIR, filename)
+    except NotFound:
+        return jsonify({"error": "not_found"}), 404
+    # Siempre revalidar: así una versión nueva del dashboard o del service worker llega sin esperar.
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
 
 @app.get("/health")
 def health_check():
@@ -1151,7 +1346,7 @@ def health_check():
             "model": "es_core_news_sm",
             "available": spacy_available,
         },
-        "fons_auth_configured": bool(FONS_SECRET_KEY and FONS_PASSWORD_HASH),
+        "fons_auth_configured": bool(FONS_SECRET_KEY and _fons_operators()),
     })
 
 @app.get("/")
@@ -1465,6 +1660,12 @@ def account_export():
     except Exception as e:
         logger.warning(f"[{aid[:8]}] Exportación: no se pudo leer el diario: {e}")
         diary = []
+    eco = _shared.get("ecosystem")
+    try:
+        modules_data = eco.export(aid) if eco is not None else []
+    except Exception as e:
+        logger.warning(f"[{aid[:8]}] Exportación: no se pudieron leer los datos de módulos: {e}")
+        modules_data = []
     payload = {
         "exported_at": datetime.now().astimezone().isoformat(),
         "terms_version": TERMS_VERSION,
@@ -1475,6 +1676,7 @@ def account_export():
             "memory_echoes": echoes,
             "diary_entries": diary,
         },
+        "modules": modules_data,
         "note": (
             "Los mensajes marcados por el sistema ético para revisión humana "
             "se anonimizan al borrar la cuenta y no forman parte de esta descarga."
@@ -1482,6 +1684,348 @@ def account_export():
     }
     resp = jsonify(payload)
     resp.headers["Content-Disposition"] = 'attachment; filename="omniamentis-mis-datos.json"'
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+# ==================== DATOS POR MÓDULO (2026-10-20) ====================
+# La persona puede revisar y borrar lo que cada módulo guardó de ella, sin pasar
+# por el chat. Solo ve lo SUYO (la cuenta sale de la sesión, nunca de la URL) y la
+# política de edad del motor también manda aquí. Ni El Fons ni otra cuenta lo ven.
+
+def _modules_context():
+    """(account_id, band, store, None) o (None, None, None, respuesta de error)."""
+    aid, err = _login_required()
+    if err:
+        return None, None, None, err
+    store = _shared.get("ecosystem")
+    if store is None:
+        return None, None, None, (jsonify({
+            "error": "ecosystem_unavailable",
+            "message": "Los datos de los módulos no están disponibles ahora mismo.",
+        }), 503)
+    return aid, _current_age_band(), store, None
+
+
+def _module_or_error(name: str, band: str):
+    """None si el módulo existe y la edad lo permite; si no, la respuesta de error."""
+    if name not in MODULE_MIN_AGE_BAND:
+        return jsonify({"error": "module_not_found", "message": "Ese módulo no existe."}), 404
+    if not module_allowed(name, band):
+        return jsonify({
+            "error": "age_restricted",
+            "message": "Ese módulo todavía no está disponible para tu rango de edad.",
+        }), 403
+    return None
+
+
+@app.get("/api/account/modules")
+def modules_overview():
+    """Módulos del ecosistema, si tu edad los permite y cuántos registros tienes en cada uno."""
+    aid, band, store, err = _modules_context()
+    if err:
+        return err
+    limited = _rate_limited("modules_read")
+    if limited:
+        return limited
+    try:
+        counts = store.counts(aid)
+    except Exception as e:
+        logger.warning(f"[{aid[:8]}] Módulos: no se pudo contar: {e}")
+        return jsonify({"error": "ecosystem_unavailable",
+                        "message": "No se pudieron leer los datos de los módulos."}), 503
+    return jsonify({"modules": [
+        {"name": name, "min_age_band": minimum, "allowed": module_allowed(name, band),
+         "records": counts.get(name, 0)}
+        for name, minimum in MODULE_MIN_AGE_BAND.items()
+    ]})
+
+
+@app.get("/api/account/modules/<name>/records")
+def module_records(name: str):
+    """Registros propios de un módulo (más nuevos primero). ?kind= filtra, ?limit= (1-500)."""
+    aid, band, store, err = _modules_context()
+    if err:
+        return err
+    limited = _rate_limited("modules_read")
+    if limited:
+        return limited
+    denied = _module_or_error(name, band)
+    if denied:
+        return denied
+    kind = request.args.get("kind") or None
+    raw_limit = request.args.get("limit", "100")
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid_request", "message": "limit debe ser un número entero."}), 400
+    try:
+        rows = store.list(aid, name, kind, limit=limit)
+    except StoreError:
+        return jsonify({"error": "invalid_request", "message": "Filtro o límite no válido."}), 400
+    except Exception as e:
+        logger.warning(f"[{aid[:8]}] Módulos: no se pudieron leer los registros: {e}")
+        return jsonify({"error": "ecosystem_unavailable",
+                        "message": "No se pudieron leer los datos del módulo."}), 503
+    resp = jsonify({"module": name, "records": rows, "count": len(rows)})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.delete("/api/account/modules/<name>/records")
+def module_records_delete(name: str):
+    """Borra TODO lo que ese módulo guardó de ti. Body: {"confirm": true}."""
+    aid, band, store, err = _modules_context()
+    if err:
+        return err
+    limited = _rate_limited("modules_delete")
+    if limited:
+        return limited
+    denied = _module_or_error(name, band)
+    if denied:
+        return denied
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or body.get("confirm") is not True:
+        return jsonify({"error": "confirmation_required",
+                        "message": 'Para borrar envía {"confirm": true}. No se puede deshacer.'}), 400
+    try:
+        deleted = store.delete_module(aid, name)
+    except Exception as e:
+        logger.warning(f"[{aid[:8]}] Módulos: no se pudo borrar: {e}")
+        return jsonify({"error": "ecosystem_unavailable",
+                        "message": "No se pudo borrar ahora mismo."}), 503
+    return jsonify({"module": name, "deleted": deleted})
+
+
+# ==================== CORPORAL: VERIFICACIÓN DE ADULTOS (2026-11-15) ====================
+# Solo mayores de 18 años. La persona envía cédula + foto del rostro (+ documento universitario si pide
+# el nivel estudiante); el dueño las revisa a mano desde el panel LOCAL del Fons. El servidor no decide nada.
+# Las imágenes se borran 24 h después de aprobar, al rechazar o a los 7 días sin revisar (verification.py).
+
+CORPORAL = "Corporal Verified"
+VERIFICATION_MAX_BODY = 3 * MAX_IMAGE_BYTES + 256 * 1024
+INTIMATE_CONSENT_TEXT = (
+    "Medir y registrar la longitud del miembro viril es OPCIONAL y solo para personas adultas verificadas. "
+    "Esa medida no afecta ni define tu sexualidad ni tu salud sexual; es solo un dato corporal más. "
+    "Puedes retirar este consentimiento cuando quieras. Si lo haces, dejaremos de usar esa medida."
+)
+
+
+def _verification_context():
+    """(account_id, store, None) o (None, None, respuesta de error). Exige cuenta adulta."""
+    aid, err = _login_required()
+    if err:
+        return None, None, err
+    denied = _module_or_error(CORPORAL, _current_age_band())
+    if denied:
+        return None, None, denied
+    store = _shared.get("verification")
+    if store is None:
+        return None, None, (jsonify({"error": "verification_unavailable",
+                                     "message": "La verificación no está disponible ahora mismo."}), 503)
+    return aid, store, None
+
+
+def _verification_state(aid: str, store) -> Dict[str, Any]:
+    st = store.status(aid)
+    return {
+        "status": st.get("status", "none"),
+        "tier": st.get("tier"),
+        "access": store.access_level(aid),
+        "intimate_measure_consent": store.can_use_intimate_measure(aid),
+        "consent_text": INTIMATE_CONSENT_TEXT,
+        "consent_version": CONSENT_TEXT_VERSION,
+    }
+
+
+@app.get("/api/corporal/verification")
+def corporal_verification_status():
+    aid, store, err = _verification_context()
+    if err:
+        return err
+    limited = _rate_limited("verification_read")
+    if limited:
+        return limited
+    resp = jsonify(_verification_state(aid, store))
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.post("/api/corporal/verification")
+def corporal_verification_submit():
+    """multipart/form-data: tier (adult | adult_student), birth_date (AAAA-MM-DD) y los archivos
+    id_doc, face (+ student_doc para adult_student)."""
+    aid, store, err = _verification_context()
+    if err:
+        return err
+    limited = _rate_limited("verification_submit")
+    if limited:
+        return limited
+    length = request.content_length
+    if length is None or length > VERIFICATION_MAX_BODY:
+        return jsonify({"error": "payload_too_large",
+                        "message": "Cada imagen debe pesar 5 MB o menos."}), 413
+    tier = request.form.get("tier", "")
+    if tier not in _VERIF_REQUIRED:
+        raise VerificationError("Elige el nivel: adulto o adulto estudiante.")
+    try:
+        birth = datetime.strptime(request.form.get("birth_date", ""), "%Y-%m-%d").date()
+    except ValueError:
+        raise VerificationError("Escribe tu fecha de nacimiento como AAAA-MM-DD.")
+    images: Dict[str, bytes] = {}
+    for kind in _VERIF_REQUIRED[tier]:
+        f = request.files.get(kind)
+        if f is None:
+            raise VerificationError("Falta el archivo: " + kind + ".")
+        images[kind] = f.read(MAX_IMAGE_BYTES + 1)
+    if set(request.files) - set(_VERIF_REQUIRED[tier]):
+        raise VerificationError("Hay archivos que no corresponden a ese nivel.")
+    store.submit(aid, tier, birth, images)
+    logger.info(f"[{aid[:8]}] Verificación de Corporal enviada ({tier})")
+    resp = jsonify(_verification_state(aid, store))
+    resp.headers["Cache-Control"] = "no-store"
+    return resp, 201
+
+
+@app.post("/api/corporal/consent")
+def corporal_consent_grant():
+    """Body: {"version": "<consent_version>"}. Consentimiento explícito para la medida sensible."""
+    aid, store, err = _verification_context()
+    if err:
+        return err
+    limited = _rate_limited("consent")
+    if limited:
+        return limited
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("version"), str):
+        return jsonify({"error": "invalid_request", "message": 'Envía {"version": "..."}.'}), 400
+    store.grant_consent(aid, "intimate_measure", body["version"])
+    return jsonify(_verification_state(aid, store))
+
+
+@app.delete("/api/corporal/consent")
+def corporal_consent_revoke():
+    aid, store, err = _verification_context()
+    if err:
+        return err
+    limited = _rate_limited("consent")
+    if limited:
+        return limited
+    store.revoke_consent(aid, "intimate_measure")
+    return jsonify(_verification_state(aid, store))
+
+
+# --- Panel del Fons (solo local + sesión del Fons): cola de revisión ---
+
+_IMAGE_MIME = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+_ALL_IMAGE_KINDS = ("id_doc", "face", "student_doc")
+
+
+@app.get("/api/fons/verifications")
+@require_fons_auth
+def fons_verifications():
+    store = _shared.get("verification")
+    if store is None:
+        return jsonify({"error": "verification_unavailable"}), 503
+    store.purge_due()
+    accounts = _shared.get("accounts")
+    items = []
+    for row in store.list_pending():
+        name = ""
+        if accounts is not None:
+            prof = accounts.get_profile(row["account_id"])
+            name = (prof or {}).get("display_name") or ""
+        items.append({"id": row["id"], "tier": row["tier"], "created_at": row["created_at"],
+                      "expires_at": row["purge_at"], "declared_birth": row["declared_birth"],
+                      "display_name": name, "images": list(_VERIF_REQUIRED[row["tier"]])})
+    resp = jsonify({"pending": items, "count": len(items)})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.get("/api/fons/verifications/<int:vid>/image/<kind>")
+@require_fons_auth
+def fons_verification_image(vid: int, kind: str):
+    store = _shared.get("verification")
+    if store is None or kind not in _ALL_IMAGE_KINDS:
+        return jsonify({"error": "not_found"}), 404
+    try:
+        data, ext = store.read_image(vid, kind)
+    except (VerificationError, OSError):
+        return jsonify({"error": "not_found"}), 404
+    _fons_audit.record("verification_view", getattr(g, "fons_operator", ""), verification_id=vid, kind=kind)
+    resp = Response(data, mimetype=_IMAGE_MIME[ext])
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Content-Security-Policy"] = "default-src 'none'"
+    return resp
+
+
+@app.post("/api/fons/verifications/<int:vid>/approve")
+@require_fons_auth
+def fons_verification_approve(vid: int):
+    store = _shared.get("verification")
+    if store is None:
+        return jsonify({"error": "verification_unavailable"}), 503
+    operator = getattr(g, "fons_operator", "")
+    store.approve(vid, operator)
+    _fons_audit.record("verification_approved", operator, verification_id=vid)
+    return jsonify({"id": vid, "status": "approved"})
+
+
+@app.post("/api/fons/verifications/<int:vid>/reject")
+@require_fons_auth
+def fons_verification_reject(vid: int):
+    store = _shared.get("verification")
+    if store is None:
+        return jsonify({"error": "verification_unavailable"}), 503
+    body = request.get_json(silent=True)
+    reason = body.get("reason") if isinstance(body, dict) and isinstance(body.get("reason"), str) else ""
+    operator = getattr(g, "fons_operator", "")
+    store.reject(vid, operator, reason)
+    _fons_audit.record("verification_rejected", operator, verification_id=vid)
+    return jsonify({"id": vid, "status": "rejected"})
+
+
+# ==================== OMNIAFORGE: REVISIÓN DE CÓDIGO (2026-10-20) ====================
+# Revisa código Python SIN ejecutarlo (análisis estático). El servidor nunca ejecuta
+# código de las personas; ver core/forge/code_review.py. Solo adultos (policy.py).
+
+@app.post("/api/forge/review")
+def forge_review():
+    aid, err = _login_required()
+    if err:
+        return err
+    denied = _module_or_error("OmniaForge", _current_age_band())
+    if denied:
+        return denied
+    limited = _rate_limited("forge_review")
+    if limited:
+        return limited
+    if (request.content_length or 0) > 4 * forge_cr.MAX_CODE_CHARS:
+        return jsonify({"error": "payload_too_large", "message": "El código es demasiado largo."}), 413
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("code"), str):
+        return jsonify({"error": "invalid_request", "message": 'Envía {"code": "...", "language": "python"}.'}), 400
+    language = forge_cr.normalize_language(body.get("language") if isinstance(body.get("language"), str) else None)
+    if language != "python":
+        return jsonify({"error": "unsupported_language", "message": "Por ahora solo se revisa Python."}), 400
+    try:
+        result = forge_cr.review(body["code"])
+    except forge_cr.ReviewError as exc:
+        return jsonify({"error": "invalid_request", "message": str(exc)}), 400
+    result["text"] = forge_cr.format_review(result)
+    # Resumen numérico para las gráficas del módulo (nunca el código). Si falla, la revisión sigue valiendo.
+    store = _shared.get("ecosystem")
+    saved = False
+    if store is not None:
+        try:
+            store.add(aid, "OmniaForge", "revision", forge_cr.summary(result))
+            saved = True
+        except Exception as e:
+            logger.warning(f"[{aid[:8]}] Forge: no se pudo guardar el resumen: {e}")
+    result["saved"] = saved
+    resp = jsonify(result)
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
@@ -1520,6 +2064,12 @@ def account_delete():
             logger.info(f"[{aid[:8]}] Registros éticos anonimizados: {counts}")
     except Exception as e:
         logger.error(f"[{aid[:8]}] NO se pudieron anonimizar los registros éticos: {e}")
+    # Documentos y consentimientos de la verificación de Corporal (si los hubiera).
+    try:
+        if _shared.get("verification") is not None:
+            _shared["verification"].delete_account_data(aid)
+    except Exception as e:
+        logger.error(f"[{aid[:8]}] NO se pudo borrar la verificación de Corporal: {e}")
     session.clear()
     logger.info(f"[{aid[:8]}] Cuenta y datos eliminados")
     return jsonify({"deleted": True})
@@ -1529,32 +2079,51 @@ def account_delete():
 
 @app.post("/api/auth/login")
 def fons_login():
-    """Autenticación de El Fons. Body: {"password": "..."}."""
-    if not FONS_PASSWORD_HASH or not FONS_SECRET_KEY:
+    """Autenticación de El Fons. Body: {"password": "...", "operator": "ana"}.
+    `operator` es opcional: sin él se usa el modo anterior (revisor 'fons')."""
+    denied = _local_only_denied()
+    if denied:
+        return denied
+    operators = _fons_operators()
+    if not operators or not FONS_SECRET_KEY:
         return jsonify({
             "error": "Autenticación no configurada en el servidor. "
                      "Ejecutar: python scripts/set_fons_password.py"
         }), 503
 
+    ip = request.remote_addr or ""
+    if not _account_rate_ok("fons_login"):
+        _fons_audit.record("login_blocked", "", ip=ip)
+        return jsonify({"error": "Demasiados intentos. Espera unos minutos."}), 429
+
     data = request.get_json(silent=True)
-    if not data or "password" not in data:
+    if not isinstance(data, dict) or not isinstance(data.get("password"), str) or not data["password"]:
         return jsonify({"error": "Campo 'password' requerido"}), 400
 
-    if not verify_password(data["password"], FONS_PASSWORD_HASH):
+    operator = data.get("operator", LEGACY_OPERATOR)
+    stored = operators.get(operator) if isinstance(operator, str) else None
+    ok = verify_password(data["password"], stored or _DUMMY_FONS_HASH) and stored is not None
+    if not ok:
+        label = operator if isinstance(operator, str) and OPERATOR_RE.match(operator) else "invalido"
+        _fons_audit.record("login_fail", label, ip=ip)
         return jsonify({"error": "Contraseña incorrecta"}), 401
 
     ttl_seconds = 8 * 3600
-    token = create_session_token(FONS_SECRET_KEY, ttl_seconds=ttl_seconds)
-    return jsonify({"token": token, "expires_in": ttl_seconds})
+    token = create_session_token(FONS_SECRET_KEY, ttl_seconds=ttl_seconds, operator=operator)
+    _fons_audit.record("login_ok", operator, ip=ip)
+    return jsonify({"token": token, "expires_in": ttl_seconds, "operator": operator})
 
 
 @app.get("/api/auth/verify")
 def fons_verify():
     """Verifica si un token Bearer sigue siendo válido."""
+    denied = _local_only_denied()
+    if denied:
+        return denied
     auth_header = request.headers.get("Authorization", "")
     token = auth_header[len("Bearer "):] if auth_header.startswith("Bearer ") else ""
-    valid = bool(FONS_SECRET_KEY) and verify_session_token(token, FONS_SECRET_KEY)
-    return jsonify({"valid": valid})
+    operator = token_operator(token, FONS_SECRET_KEY) if FONS_SECRET_KEY else None
+    return jsonify({"valid": operator is not None and operator in _fons_operators()})
 
 # ==================== PANEL DEL FONS (protegido, compartido) ====================
 
@@ -1640,6 +2209,8 @@ def fons_decide(consultation_id: str):
             modified_response=data.get("modified_response"),
             guidance=data.get("guidance", ""),
         )
+        _fons_audit.record("decision", getattr(g, "fons_operator", ""), consultation_id=consultation_id,
+                           action=decision.action.value, approved=bool(decision.approved))
         return jsonify({
             "consultation_id": consultation_id,
             "action": decision.action.value,
@@ -1652,6 +2223,18 @@ def fons_decide(consultation_id: str):
     except Exception as e:
         logger.error(f"Error procesando decisión del Fons: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.get("/api/ethics/fons/audit")
+@require_fons_auth
+def fons_audit_log():
+    """Últimos eventos de la bitácora del Fons (entradas, fallos y decisiones).
+    ?limit= (1-200). No incluye contraseñas, tokens ni el contenido de las consultas."""
+    try:
+        limit = int(request.args.get("limit", "50"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit debe ser un número entero"}), 400
+    return jsonify({"events": _fons_audit.recent(limit)})
+
 
 # ==================== ENTREGA ASÍNCRONA AL USUARIO ====================
 
@@ -1829,6 +2412,8 @@ def chat_endpoint():
         user_id=user_id,
         consciousness_level=sess["identity"].consciousness_level,
         session_id=user_id,
+        age_band=_current_age_band(),
+        data_store=_shared.get("ecosystem"),
     )
 
     # 3. Detección de intención y emoción (por usuario).
@@ -1946,6 +2531,8 @@ def chat_endpoint():
         "echo_saved": echo_saved,
         "module": routed["module"] if routed is not None else None,
         "auth_required": routed["auth_required"] if routed is not None else False,
+        "age_restricted": routed["age_restricted"] if routed is not None else False,
+        "widget": routed.get("widget") if routed is not None else None,
         "grief_subtype": grief_subtype_used,
     })
 
@@ -2084,12 +2671,14 @@ if __name__ == "__main__":
     import atexit
     atexit.register(save_all_sessions)
     atexit.register(lambda: _shared["accounts"] and _shared["accounts"].close())
+    atexit.register(lambda: _shared["ecosystem"] and _shared["ecosystem"].close())
 
     port = int(os.environ.get("PORT", 8000))
+    host = os.environ.get("HOST", "0.0.0.0")   # el lanzador de escritorio usa 127.0.0.1
 
-    print(f"🚀 Iniciando servidor Flask en http://0.0.0.0:{port}")
+    print(f"🚀 Iniciando servidor Flask en http://{host}:{port}")
     app.run(
-        host="0.0.0.0",
+        host=host,
         port=port,
         debug=False,
         use_reloader=False,

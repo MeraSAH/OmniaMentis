@@ -166,6 +166,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 // 127.0.0.1) para no mezclar "sitios" distintos; si se abrió como archivo
 // (file://) o desde otro dominio, cae a 127.0.0.1.
 function defaultApiUrl() {
+  if (location.pathname.startsWith('/app/')) return location.origin;   // servido por Flask: mismo origen
   const h = location.hostname;
   const loopback = (h === 'localhost' || h === '127.0.0.1');
   return `http://${loopback ? h : '127.0.0.1'}:8000`;

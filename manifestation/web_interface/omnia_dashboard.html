@@ -2,8 +2,22 @@
 <!--
 * UBICACIÓN: OmniaMentis/manifestation/web_interface/omnia_dashboard.html
 * PROPÓSITO: Dashboard JARVIS - Omnia Mentis Core Interface
-* VERSIÓN: 3.1.0
-* FECHA: 2026-10-15
+* VERSIÓN: 3.2.0
+* FECHA: 2026-10-18
+* CAMBIOS v3.2 (2026-10-20): botón «▦ MÓDULOS»: la persona revisa, módulo por módulo, lo
+*   que cada módulo guardó de ella y puede borrar los datos de un módulo (pide
+*   confirmación). Usa /api/account/modules; solo ve lo suyo y la edad manda.
+* CAMBIOS v3.2: ECOSISTEMA DENTRO DE OMNIAMENTIS. Un solo sistema: esta pantalla
+*   es la interfaz de todo. Cuando el motor responde con un «widget» (campo
+*   `widget` de /api/chat) se dibuja aquí mismo:
+*     - aura_pulse (OmniaHabits): pulso de luz del color del hábito (1.7 s).
+*     - focus_timer (OmniaChronos): pantalla negra de Enfoque Absoluto con
+*       reloj, botón «Terminar» y Esc para ocultarla. Es solo interfaz: el
+*       navegador NO puede bloquear las notificaciones del dispositivo.
+*   Las respuestas largas se escriben en ~4 s como máximo (antes una rutina tardaba ~25 s).
+*   Los datos del widget vienen de la red: se validan (color #RRGGBB, minutos
+*   1-180) y lo que no encaja se descarta. Si algo falla al dibujar, el chat
+*   sigue funcionando. Al cerrar sesión o vencer ésta se cierra el enfoque.
 * CAMBIOS v3.1: CUENTA OBLIGATORIA PARA CONVERSAR. Sin sesión, el chat, el
 *   micrófono y el envío quedan desactivados y se muestra un aviso con el botón
 *   «Crear cuenta o entrar». El servidor responde 401 «account_required» a las
@@ -103,6 +117,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OmniaMentis — IA conversacional experimental</title>
+<meta name="theme-color" content="#030810">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <style>
 /* ===== RESET ===== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1036,6 +1054,116 @@ body::before { display: none; }          /* sin líneas CRT: el cristal pide un 
   .loader { display: none; }
   .loader-letter { opacity: 1; }
 }
+
+/* ===== ECOSISTEMA (v3.2): aura de hábitos y enfoque absoluto ===== */
+.eco-aura {
+  position: fixed; inset: 0; z-index: 9000; pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, var(--aura, #00c8ff) 0%, transparent 70%);
+  opacity: 0; animation: eco-aura-pulse 1.6s ease-out forwards;
+}
+@keyframes eco-aura-pulse { 0% { opacity: 0; transform: scale(.6); } 25% { opacity: .85; } 100% { opacity: 0; transform: scale(1.4); } }
+.eco-focus {
+  position: fixed; inset: 0; z-index: 9500; background: #000;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2rem;
+  font-family: var(--font-mono);
+}
+.eco-focus-clock { font-size: clamp(2rem, 8vw, 4rem); color: var(--neon-dim); letter-spacing: .15em; }
+.eco-focus-line {
+  width: min(60vw, 420px); height: 2px; background: var(--neon-blue);
+  box-shadow: 0 0 12px var(--neon-blue); opacity: .8; animation: eco-breathe 5s ease-in-out infinite;
+}
+@keyframes eco-breathe { 0%, 100% { opacity: .15; transform: scaleX(.6); } 50% { opacity: 1; transform: scaleX(1); } }
+.eco-focus-actions { display: flex; flex-direction: column; align-items: center; gap: .75rem; padding: 0 1rem; text-align: center; }
+.eco-focus-btn {
+  font: inherit; color: var(--neon-blue); background: transparent; cursor: pointer;
+  border: 1px solid var(--neon-dim); border-radius: 999px; padding: .6rem 1.6rem;
+}
+.eco-focus-btn:hover, .eco-focus-btn:focus-visible { border-color: var(--neon-blue); outline: none; box-shadow: 0 0 10px var(--neon-blue); }
+.eco-focus-hint { font-size: .75rem; color: var(--neon-dim); }
+
+/* ===== MÓDULOS (v3.2): revisar y borrar los datos de cada módulo ===== */
+.mod-box { width: min(780px, 100%); --mc: var(--neon-blue); border-color: color-mix(in srgb, var(--mc) 55%, transparent); box-shadow: 0 0 40px color-mix(in srgb, var(--mc) 22%, transparent); }
+.mod-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 10px; }
+.mod-card-sel {
+  --mc: var(--neon-blue);
+  display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 6px; text-align: left;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--mc) 16%, var(--bg-card)), var(--bg-card) 70%);
+  border: 1px solid color-mix(in srgb, var(--mc) 45%, transparent); border-left: 4px solid var(--mc);
+  color: var(--text-main); font: inherit; cursor: pointer;
+}
+.mod-card-sel:hover:not(:disabled), .mod-card-sel:focus-visible { outline: none; box-shadow: 0 0 14px color-mix(in srgb, var(--mc) 55%, transparent); }
+.mod-card-sel:disabled { opacity: .5; cursor: not-allowed; }
+.mod-grid > li { display: flex; }
+.mod-grid .mod-card-sel { width: 100%; }
+.mod-card-sel .mod-ico { font-size: 20px; line-height: 1; }
+.mod-card-sel .mod-tag { color: var(--mc); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.mod-banner {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 6px; margin: 4px 0 12px;
+  background: linear-gradient(120deg, color-mix(in srgb, var(--mc) 28%, var(--bg-card)), var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--mc) 50%, transparent);
+}
+.mod-banner .mod-ico { font-size: 28px; }
+.mod-banner .mod-name { color: var(--mc); font-size: 16px; font-weight: 600; }
+.mod-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.mod-tile { padding: 9px 11px; border-radius: 6px; background: var(--bg-card); border: 1px solid color-mix(in srgb, var(--mc) 30%, transparent); }
+.mod-tile b { display: block; color: var(--mc); font-size: 20px; font-weight: 600; line-height: 1.2; }
+.mod-tile span { color: var(--text-sub); font-size: 11px; }
+.mod-panel { padding: 10px 12px 12px; margin-bottom: 10px; border-radius: 6px; background: var(--bg-card); border: 1px solid var(--border-msg); }
+.mod-panel h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .04em; color: var(--text-bright); text-transform: uppercase; }
+.mod-panel p.mod-sub { margin: 6px 0 0; }
+.mod-chart { width: 100%; height: auto; display: block; }
+.mod-chart text { fill: var(--text-sub); font-size: 10px; font-family: inherit; }
+.mod-chart text.v { fill: var(--text-bright); }
+.mod-chart text.big { fill: var(--text-bright); font-size: 22px; font-weight: 600; }
+.mod-row2 { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.mod-row2 > * { flex: 1 1 200px; min-width: 0; }
+.mod-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-main); }
+.mod-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.mod-hbar { display: grid; grid-template-columns: minmax(90px, 38%) 1fr 64px; gap: 8px; align-items: center; font-size: 12px; color: var(--text-main); margin: 4px 0; }
+.mod-hbar .trk { height: 10px; border-radius: 5px; background: rgba(255,255,255,.08); overflow: hidden; }
+.mod-hbar .fil { height: 100%; background: var(--mc); border-radius: 5px; }
+.mod-hbar b { color: var(--text-bright); text-align: right; font-weight: 600; }
+.mod-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mod-chip { padding: 3px 10px; border-radius: 999px; font-size: 11px; color: var(--text-bright); background: color-mix(in srgb, var(--mc) 22%, transparent); border: 1px solid color-mix(in srgb, var(--mc) 50%, transparent); }
+.mod-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.mod-swatch { width: 54px; text-align: center; font-size: 10px; color: var(--text-sub); }
+.mod-swatch i { display: block; height: 34px; border-radius: 4px; border: 1px solid rgba(255,255,255,.25); margin-bottom: 3px; }
+.mod-empty { padding: 14px; text-align: center; color: var(--text-sub); font-size: 12px; border: 1px dashed color-mix(in srgb, var(--mc) 50%, transparent); border-radius: 6px; margin-bottom: 10px; }
+.mod-details { margin-top: 6px; }
+.mod-seg { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+.mod-seg button[aria-pressed="true"] { background: color-mix(in srgb, var(--mc) 30%, transparent); border-color: var(--mc); color: var(--text-bright); }
+.mod-code { width: 100%; min-height: 130px; resize: vertical; box-sizing: border-box; font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace;
+  color: var(--text-bright); background: #020812; border: 1px solid color-mix(in srgb, var(--mc) 45%, transparent); border-radius: 4px; padding: 8px; }
+.mod-code:focus-visible { outline: 1px solid var(--mc); }
+.mod-finds { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-main); }
+.mod-finds li { padding: 5px 8px; background: rgba(255,255,255,.04); border-left: 3px solid var(--mc); word-break: break-word; }
+.mod-finds li.alto { border-left-color: #f87171; } .mod-finds li.bajo { border-left-color: #60a5fa; }
+:root[data-perf="medio"] *, :root[data-perf="bajo"] * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+:root[data-perf="medio"] :is(.glass, .header, .panel-left, .panel-right, .panel-center, .footer, .acct-box),
+:root[data-perf="bajo"] :is(.glass, .header, .panel-left, .panel-right, .panel-center, .footer, .acct-box) { background-color: rgba(8,20,38,.96) !important; }
+:root[data-perf="bajo"] *, :root[data-perf="bajo"] *::before, :root[data-perf="bajo"] *::after { animation: none !important; transition: none !important; }
+.mod-details summary { cursor: pointer; color: var(--mc); font-size: 12px; padding: 6px 0; }
+.mod-details summary:focus-visible { outline: 1px solid var(--mc); }
+.mod-details .mod-rec { border-left-color: var(--mc); }
+@media (max-width: 520px) { .mod-grid { grid-template-columns: 1fr; } .mod-hbar { grid-template-columns: 1fr 1fr 30px; } }
+.mod-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.mod-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 12px; border: 1px solid var(--border-msg); border-radius: 3px; background: var(--bg-card);
+}
+.mod-name { color: var(--text-bright); font-size: 13px; }
+.mod-sub { color: var(--text-sub); font-size: 11px; }
+.mod-btn {
+  font: inherit; font-size: 11px; color: var(--neon-blue); background: transparent; cursor: pointer;
+  border: 1px solid var(--neon-dim); border-radius: 999px; padding: 4px 12px; white-space: nowrap;
+}
+.mod-btn:hover:not(:disabled), .mod-btn:focus-visible { border-color: var(--neon-blue); outline: none; box-shadow: 0 0 8px rgba(0,200,255,.4); }
+.mod-btn:disabled { opacity: .45; cursor: not-allowed; }
+.mod-btn.danger { color: var(--danger); border-color: var(--danger); }
+.mod-rec { padding: 8px 10px; border-left: 2px solid var(--neon-dim); background: var(--bg-card); font-size: 12px; color: var(--text-main); word-break: break-word; }
+.mod-rec time { color: var(--text-sub); display: block; font-size: 11px; }
+.mod-actions { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+.mod-note { color: var(--text-sub); font-size: 11px; margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -1050,9 +1178,10 @@ body::before { display: none; }          /* sin líneas CRT: el cristal pide un 
       <circle cx="11" cy="11" r="5.5" fill="none" stroke="#00c8ff" stroke-width=".6" opacity=".5"/>
       <circle cx="11" cy="11" r="2.2" fill="#00c8ff" filter="url(#glow)"/>
     </svg>
-    OMNIA MENTIS <span>// CORE INTERFACE v3.1</span>
+    OMNIA MENTIS <span>// CORE INTERFACE v3.2</span>
   </div>
   <div class="hdr-right">
+    <button class="acct-btn-hdr" id="modBtn" type="button" title="Ver y borrar lo que cada módulo guardó de ti">▦ MÓDULOS</button>
     <button class="acct-btn-hdr" id="acctBtn" type="button" title="Cuenta: entrar, registrarte o ver tu perfil">👤 ENTRAR</button>
     <button class="voice-toggle-btn" id="voiceToggleBtn" type="button" title="Activar/silenciar voz de Omnia" aria-pressed="false">🔇 VOZ</button>
     <div id="dot" class="dot off"></div>
@@ -1178,6 +1307,19 @@ body::before { display: none; }          /* sin líneas CRT: el cristal pide un 
 </footer>
 
 </div><!-- /shell -->
+
+<!-- ===== MÓDULOS (v3.2) ===== -->
+<div class="acct-overlay" id="modOverlay" aria-hidden="true">
+  <div class="acct-box mod-box" role="dialog" aria-modal="true" aria-labelledby="modTitle">
+    <div class="acct-head">
+      <span class="acct-title" id="modTitle">Mis módulos</span>
+      <button class="acct-x" id="modClose" type="button" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="acct-msg" id="modMsg" role="alert"></div>
+    <div id="modBody"></div>
+    <p class="mod-note">Aquí ves solo lo tuyo. Los módulos no guardan nada por su cuenta: lo guarda OmniaMentis, en tu cuenta.</p>
+  </div>
+</div>
 
 <!-- ===== CUENTA (v2.8) ===== -->
 <div class="acct-overlay" id="acctOverlay" aria-hidden="true">
@@ -1336,7 +1478,17 @@ body::before { display: none; }          /* sin líneas CRT: el cristal pide un 
 // en uno y la API en el otro, la cookie de sesión se descarta y cada mensaje
 // parece un usuario nuevo. Abre el dashboard por http://127.0.0.1:8080 (evita
 // además la demora IPv6 de "localhost" en Windows).
-const API = `http://${location.hostname || '127.0.0.1'}:8000`;
+// v3.3: tres formas de saber dónde está la API, por orden:
+//   1) <meta name="omnia-api" content="https://..."> (despliegue con dominio propio),
+//   2) página servida por Flask bajo /app/ (app de escritorio o instalada): mismo origen,
+//   3) el mismo host en el puerto 8000 (modo de desarrollo con servidor estático aparte).
+const API = (() => {
+  const m = document.querySelector('meta[name="omnia-api"]');
+  const v = m && /^https?:\/\/[^\s"'<>]+$/.test(m.content || '') ? m.content.replace(/\/+$/, '') : '';
+  if (v) return v;
+  if (location.pathname === '/app' || location.pathname.startsWith('/app/')) return location.origin;
+  return `http://${location.hostname || '127.0.0.1'}:8000`;
+})();
 const PHASE_NAMES = {
   1:'Inicio',                2:'Sensibilidad Emocional',
   3:'Memoria Creciente',     4:'Perspectiva Simulada',
@@ -1422,8 +1574,12 @@ async function typewrite(el, text, spd=16) {
     box?.scrollTo(0, box.scrollHeight);
   } else {
     el.classList.add('tw-cursor');
-    for (const ch of text) {
-      el.textContent += ch;
+    // v3.2: las respuestas largas (rutinas, paletas) no deben tardar medio minuto:
+    // el tiempo total se limita a ~4 s escribiendo varios caracteres por pulso.
+    const chars = Array.from(text);
+    const step = Math.max(1, Math.ceil(chars.length * spd / 4000));
+    for (let i = 0; i < chars.length; i += step) {
+      el.textContent += chars.slice(i, i + step).join('');
       await new Promise(r => setTimeout(r, spd));
       box?.scrollTo(0, box.scrollHeight);
     }
@@ -1776,6 +1932,7 @@ async function send() {
       announce(d.response);
     } else {
       await typewrite(bubble, d.response, 15);
+      if (d.widget) ecoHandleWidget(d.widget);   // v3.2: aura / enfoque del ecosistema
     }
 
     addMeta(right, {
@@ -1817,12 +1974,1013 @@ async function send() {
   }
 }
 
+// ==================== WIDGETS DEL ECOSISTEMA (v3.2) ====================
+// El motor (OmniaMentis) decide y entrega; aquí solo se dibuja. Todo dato que
+// llega se valida antes de usarse: nunca se pone texto de la red en un estilo
+// ni en HTML (solo textContent).
+const ECO_HEX = /^#[0-9a-fA-F]{6}$/;
+const ECO_FOCUS_END_TEXT = 'terminé el bloque de enfoque';
+
+function ecoSanitizeWidget(w) {
+  if (!w || typeof w !== 'object' || !w.payload || typeof w.payload !== 'object') return null;
+  const p = w.payload;
+  const fin = v => typeof v === 'number' && Number.isFinite(v);
+  if (w.type === 'aura_pulse') {
+    if (typeof p.color_hex !== 'string' || !ECO_HEX.test(p.color_hex)) return null;
+    return { type: 'aura_pulse', color: p.color_hex.toUpperCase() };
+  }
+  if (w.type === 'focus_timer') {
+    if (!fin(p.minutes) || !fin(p.started_at) || !fin(p.ends_at)) return null;
+    const minutes = Math.round(p.minutes);
+    const seconds = Math.round(p.ends_at - p.started_at);
+    if (minutes < 1 || minutes > 180) return null;
+    if (seconds < 60 || seconds > 180 * 60 + 60) return null;
+    const label = typeof p.label === 'string' ? p.label.slice(0, 40) : '';
+    // Tiempo que falta según el reloj del SERVIDOR (evita desfases del reloj local);
+    // sin `server_now` se usa la duración completa.
+    let left = seconds;
+    if (fin(p.server_now)) left = Math.round(p.ends_at - p.server_now);
+    if (left < 1) return null;
+    if (left > seconds) left = seconds;
+    return { type: 'focus_timer', minutes, seconds, left, label };
+  }
+  return null;
+}
+
+function ecoClock(total) {
+  const s = Number.isFinite(total) && total > 0 ? Math.floor(total) : 0;
+  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+}
+
+function ecoShowAura(color) {
+  document.querySelectorAll('.eco-aura').forEach(n => n.remove());
+  const el = document.createElement('div');
+  el.className = 'eco-aura';
+  el.setAttribute('aria-hidden', 'true');
+  el.style.setProperty('--aura', color);
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 1700);
+}
+
+// Estado del enfoque en S.focus (S ya existe; así no hay zona muerta de `let`).
+function ecoCloseFocus() {
+  const f = S.focus;
+  if (!f) return;
+  S.focus = null;
+  clearInterval(f.tick);
+  clearTimeout(f.endTimer);
+  document.removeEventListener('keydown', f.onKey, true);
+  f.overlay.remove();
+  const ci = $('chatInput');
+  if (ci && !ci.disabled) ci.focus();
+}
+
+// Pide al motor que cierre el bloque (guarda el tiempo real). Espera si hay un envío en curso.
+function ecoSendText(text, tries) {
+  const n = tries || 0;
+  if (S.sending) { if (n < 20) setTimeout(() => ecoSendText(text, n + 1), 500); return; }
+  $('chatInput').value = text;
+  send();
+}
+
+function ecoStartFocus(w) {
+  ecoCloseFocus();
+  const endMs = Date.now() + w.left * 1000;
+  const title = w.label ? 'Bloque de enfoque: ' + w.label : 'Bloque de enfoque de ' + w.minutes + ' minutos';
+
+  const overlay = document.createElement('div');
+  overlay.className = 'eco-focus';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', title);
+  const clock = document.createElement('div');
+  clock.className = 'eco-focus-clock';
+  clock.textContent = ecoClock(w.left);
+  const line = document.createElement('div');
+  line.className = 'eco-focus-line';
+  line.setAttribute('aria-hidden', 'true');
+  const actions = document.createElement('div');
+  actions.className = 'eco-focus-actions';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'eco-focus-btn';
+  btn.textContent = 'Terminar';
+  const hint = document.createElement('span');
+  hint.className = 'eco-focus-hint';
+  hint.textContent = 'Esc oculta esta pantalla; el bloque sigue abierto.';
+  actions.append(btn, hint);
+  overlay.append(clock, line, actions);
+  document.body.appendChild(overlay);
+
+  const f = { overlay, tick: 0, endTimer: 0, onKey: null, finished: false };
+  f.onKey = e => {
+    if (e.key === 'Escape') { e.preventDefault(); ecoCloseFocus(); }
+    else if (e.key === 'Tab') { e.preventDefault(); btn.focus(); }   // un solo control: el foco no escapa
+  };
+  document.addEventListener('keydown', f.onKey, true);
+  f.tick = setInterval(() => {
+    const left = Math.max(0, Math.ceil((endMs - Date.now()) / 1000));
+    clock.textContent = left > 0 ? ecoClock(left) : 'Bloque completo';
+    if (left <= 0 && !f.finished) {
+      f.finished = true;
+      f.endTimer = setTimeout(() => { ecoCloseFocus(); ecoSendText(ECO_FOCUS_END_TEXT); }, 1500);
+    }
+  }, 500);
+  btn.addEventListener('click', () => { ecoCloseFocus(); ecoSendText(ECO_FOCUS_END_TEXT); });
+  S.focus = f;
+  btn.focus();
+}
+
+function ecoHandleWidget(raw) {
+  try {
+    const w = ecoSanitizeWidget(raw);
+    if (!w) return;
+    if (w.type === 'aura_pulse') ecoShowAura(w.color);
+    else if (w.type === 'focus_timer') ecoStartFocus(w);
+  } catch (e) {
+    syslog('Widget no mostrado: ' + e.message, 'err');   // un fallo visual nunca rompe el chat
+  }
+}
+
+// ==================== MIS MÓDULOS (v3.2) ====================
+// Revisar y borrar lo que cada módulo guardó de la persona. Todo el texto se pone con
+// textContent (nunca innerHTML): los datos vienen del servidor pero se tratan como no confiables.
+const MODV = { opener: null, onKey: null };
+
+function modMsg(text) { $('modMsg').textContent = text || ''; }
+function modClear() { const b = $('modBody'); while (b.firstChild) b.removeChild(b.firstChild); }
+function modEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function modClose() {
+  const ov = $('modOverlay');
+  if (!ov.classList.contains('show')) return;
+  ov.classList.remove('show');
+  ov.setAttribute('aria-hidden', 'true');
+  if (MODV.onKey) { document.removeEventListener('keydown', MODV.onKey, true); MODV.onKey = null; }
+  modClear(); modMsg('');
+  const back = MODV.opener && MODV.opener.focus ? MODV.opener : $('chatInput');
+  if (back && !back.disabled) back.focus();
+}
+
+async function modApi(path, opts) {
+  try {
+    const r = await fetch(`${API}${path}`, Object.assign({ credentials: 'include', signal: AbortSignal.timeout(20000) }, opts || {}));
+    let data = null;
+    try { data = await r.json(); } catch (e) { /* cuerpo vacío o no JSON */ }
+    return { ok: r.ok, status: r.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: null };
+  }
+}
+
+function modFail(res) {
+  if (res.status === 401) { modClose(); ACCT.me = null; renderAccountButton(); acctOpen('login'); return; }
+  if (res.status === 429) { modMsg('Demasiadas consultas seguidas. Espera un momento.'); return; }
+  if (res.status === 0) { modMsg('No se pudo contactar con OmniaMentis.'); return; }
+  modMsg((res.data && res.data.message) || 'No se pudo completar la acción.');
+}
+
+async function modOpen() {
+  if (!ACCT.me) { acctOpen('login'); return; }
+  MODV.opener = document.activeElement;
+  const ov = $('modOverlay');
+  ov.classList.add('show');
+  ov.setAttribute('aria-hidden', 'false');
+  MODV.onKey = e => {
+    if (e.key === 'Escape') { e.preventDefault(); modClose(); }
+    else if (e.key === 'Tab') {                       // el foco se queda dentro del cuadro
+      const f = [...ov.querySelectorAll('button:not(:disabled), summary, textarea')];
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  };
+  document.addEventListener('keydown', MODV.onKey, true);
+  $('modClose').focus();
+  await modShowList();
+}
+
+// ==================== MÓDULOS: UNA INTERFAZ POR MÓDULO ====================
+// Colores y textos son constantes de este archivo; de los datos del servidor solo se usan números,
+// textos (siempre con textContent) y colores #RRGGBB validados.
+const SVGNS = 'http://www.w3.org/2000/svg';
+const HEX6 = /^#[0-9a-fA-F]{6}$/;
+const MOD_THEME = {
+  'NutriVida':         { c: '#34d399', ico: '🥗', tag: 'Nutrición',
+                         hint: 'Escribe en el chat: «peso 70 kg y mido 175 cm»' },
+  'OmniaAthletics':    { c: '#fb923c', ico: '🏋️', tag: 'Entrenamiento',
+                         hint: 'Escribe en el chat: «entrené 45 minutos» o «hazme una rutina»' },
+  'OmniaChronos':      { c: '#60a5fa', ico: '⏱️', tag: 'Tiempo de enfoque',
+                         hint: 'Escribe en el chat: «bloque de enfoque de 25 minutos»' },
+  'OmniaHabits':       { c: '#f472b6', ico: '🔥', tag: 'Hábitos y racha',
+                         hint: 'Escribe en el chat: «completé la ducha de choque térmico»' },
+  'OmniaStudio':       { c: '#a78bfa', ico: '🎨', tag: 'Color y luz',
+                         hint: 'Escribe en el chat: «paleta para #FF5500» o «iluminación rembrandt»' },
+  'OmniaForge':        { c: '#fbbf24', ico: '🛠️', tag: 'Revisión de código',
+                         hint: 'Escribe en el chat «revisa este código» y pega tu Python entre ``` ```' },
+  'OmniaEngine':       { c: '#22d3ee', ico: '📈', tag: 'Ventas y cotizaciones',
+                         hint: 'Escribe en el chat: «cotiza: logo: 1 x 120 iva 15%» o «embudo: visitas 1000, leads 100, clientes 10»' },
+  'Corporal Verified': { c: '#f87171', ico: '🧍', tag: 'Verificación corporal',
+                         hint: 'Solo para personas adultas verificadas.' },
+  'OmniaCore':         { c: '#94a3b8', ico: '⚙️', tag: 'Dispositivo y rendimiento',
+                         hint: '' },
+};
+const HABIT_NAMES = {
+  victoria_magistral: 'Victoria Magistral', ducha_choque: 'Ducha de choque', entrenamiento_elite: 'Entrenamiento de élite',
+  reset_dopaminico: 'Reset dopamínico', desintoxicacion_digital: 'Desintoxicación digital',
+  evolucion_cognitiva: 'Evolución cognitiva', auditoria_tiempo: 'Auditoría de tiempo',
+  estado_sobriedad: 'Estado de sobriedad', bitacora_objetivos: 'Bitácora de objetivos',
+};
+const DOW = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
+
+function svgEl(tag, attrs, text) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const k in (attrs || {})) el.setAttribute(k, String(attrs[k]));
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+function svgRoot(w, h, label) {
+  const s = svgEl('svg', { viewBox: `0 0 ${w} ${h}`, class: 'mod-chart', role: 'img', 'aria-label': label });
+  s.appendChild(svgEl('title', {}, label));
+  s.style.maxWidth = `${Math.round(w * 1.5)}px`;   // sin esto el texto del gráfico se agranda con la pantalla
+  return s;
+}
+function fmtN(n, d, fixed) {
+  if (!Number.isFinite(n)) return '—';
+  const k = d || 0;
+  return fixed ? n.toLocaleString(undefined, { minimumFractionDigits: k, maximumFractionDigits: k })
+               : (Math.round(n * 10 ** k) / 10 ** k).toLocaleString();
+}
+function pnum(p, k) { const v = p && p[k]; return (typeof v === 'number' && Number.isFinite(v)) ? v : null; }
+function dkey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function lastDays(n) {
+  const now = new Date(), out = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    out.push({ key: dkey(d), label: DOW[d.getDay()], day: d.getDate() });
+  }
+  return out;
+}
+function byKind(recs, kind) { return recs.filter(r => r && r.kind === kind && r.payload && typeof r.payload === 'object'); }
+
+// ---- bloques de interfaz
+function mPanel(parent, title) {
+  const p = modEl('section', 'mod-panel');
+  if (title) p.appendChild(modEl('h4', '', title));
+  parent.appendChild(p);
+  return p;
+}
+function mTiles(parent, items) {
+  const g = modEl('div', 'mod-tiles');
+  for (const [value, label] of items) {
+    const t = modEl('div', 'mod-tile');
+    t.append(modEl('b', '', String(value)), modEl('span', '', label));
+    g.appendChild(t);
+  }
+  parent.appendChild(g);
+}
+function mLegend(parent, parts) {
+  const ul = modEl('ul', 'mod-legend');
+  for (const p of parts) {
+    const li = modEl('li');
+    const i = modEl('i'); i.style.background = p.color;
+    li.append(i, document.createTextNode(`${p.label}: ${p.text !== undefined ? p.text : fmtN(p.value, 1)}`));
+    ul.appendChild(li);
+  }
+  parent.appendChild(ul);
+}
+// Dona: partes [{value,color}], texto central
+function mDonut(parent, parts, big, small, label) {
+  const R = 52, C = 2 * Math.PI * R, total = parts.reduce((a, p) => a + Math.max(0, p.value), 0);
+  const s = svgRoot(150, 150, label);
+  s.appendChild(svgEl('circle', { cx: 75, cy: 75, r: R, fill: 'none', stroke: 'rgba(255,255,255,.10)', 'stroke-width': 18 }));
+  let acc = 0;
+  if (total > 0) for (const p of parts) {
+    if (p.value <= 0) continue;
+    const len = C * p.value / total;
+    s.appendChild(svgEl('circle', { cx: 75, cy: 75, r: R, fill: 'none', stroke: p.color, 'stroke-width': 18,
+      'stroke-dasharray': `${len} ${C - len}`, 'stroke-dashoffset': -acc, transform: 'rotate(-90 75 75)' }));
+    acc += len;
+  }
+  s.appendChild(svgEl('text', { x: 75, y: 80, 'text-anchor': 'middle', class: 'big' }, big));
+  s.appendChild(svgEl('text', { x: 75, y: 97, 'text-anchor': 'middle' }, small || ''));
+  parent.appendChild(s);
+}
+// Anillo de progreso 0..1
+function mRing(parent, frac, color, big, small, label) {
+  const f = Math.max(0, Math.min(1, frac));
+  mDonut(parent, [{ value: f, color }, { value: 1 - f, color: 'rgba(255,255,255,0)' }], big, small, label);
+}
+// Barras verticales [{label,value}]
+function mBars(parent, items, color, unit, label, dec) {
+  const n = items.length, step = 38, W = Math.max(n * step, 200), H = 150, base = 120;
+  const max = Math.max(1, ...items.map(i => i.value));
+  const s = svgRoot(W, H, label);
+  s.appendChild(svgEl('line', { x1: 0, y1: base, x2: W, y2: base, stroke: 'rgba(255,255,255,.25)' }));
+  items.forEach((it, i) => {
+    const h = Math.round((base - 36) * it.value / max), x = i * step + 7;
+    if (h > 0) s.appendChild(svgEl('rect', { x, y: base - h, width: step - 14, height: h, rx: 3, fill: it.color || color }));
+    if (it.value > 0) s.appendChild(svgEl('text', { x: x + (step - 14) / 2, y: base - h - 4, 'text-anchor': 'middle', class: 'v' }, fmtN(it.value, dec || 1, dec === 2)));
+    s.appendChild(svgEl('text', { x: x + (step - 14) / 2, y: base + 13, 'text-anchor': 'middle' }, it.label));
+    if (it.sub) s.appendChild(svgEl('text', { x: x + (step - 14) / 2, y: base + 25, 'text-anchor': 'middle' }, it.sub));
+  });
+  if (unit) s.appendChild(svgEl('text', { x: 2, y: 9 }, unit));
+  parent.appendChild(s);
+}
+// Barras horizontales HTML [{label,value}]
+function mHBars(parent, items, max, fmt) {
+  const m = max || Math.max(1, ...items.map(i => i.value));
+  for (const it of items) {
+    const row = modEl('div', 'mod-hbar');
+    const trk = modEl('div', 'trk'), fil = modEl('div', 'fil');
+    fil.style.width = `${Math.max(0, Math.min(100, 100 * it.value / m))}%`;
+    trk.appendChild(fil);
+    row.append(modEl('span', '', it.label), trk, modEl('b', '', fmt ? fmt(it.value) : fmtN(it.value, 0)));
+    parent.appendChild(row);
+  }
+}
+// Línea [{label,value}] con bandas opcionales [{from,to,color}]
+function mLine(parent, pts, color, bands, label) {
+  const W = 320, H = 130, L = 30, T = 22, B = 24, R = 8;
+  const vals = pts.map(p => p.value);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (bands) for (const b of bands) { lo = Math.min(lo, b.from); hi = Math.max(hi, b.to); }
+  if (hi - lo < 1) { hi += 1; lo -= 1; }
+  const X = i => L + (pts.length === 1 ? (W - L - R) / 2 : i * (W - L - R) / (pts.length - 1));
+  const Y = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
+  const s = svgRoot(W, H, label);
+  for (const b of bands || []) {
+    const y1 = Y(Math.min(b.to, hi)), y2 = Y(Math.max(b.from, lo));
+    if (y2 > y1) s.appendChild(svgEl('rect', { x: L, y: y1, width: W - L - R, height: y2 - y1, fill: b.color, opacity: .16 }));
+  }
+  s.appendChild(svgEl('line', { x1: L, y1: H - B, x2: W - R, y2: H - B, stroke: 'rgba(255,255,255,.25)' }));
+  s.appendChild(svgEl('text', { x: L - 4, y: T + 8, 'text-anchor': 'end' }, fmtN(hi, 1)));
+  s.appendChild(svgEl('text', { x: L - 4, y: H - B, 'text-anchor': 'end' }, fmtN(lo, 1)));
+  if (pts.length > 1) s.appendChild(svgEl('polyline', { points: pts.map((p, i) => `${X(i)},${Y(p.value)}`).join(' '),
+    fill: 'none', stroke: color, 'stroke-width': 2.5, 'stroke-linejoin': 'round' }));
+  pts.forEach((p, i) => {
+    s.appendChild(svgEl('circle', { cx: X(i), cy: Y(p.value), r: 4, fill: color }));
+    if (i === 0 || i === pts.length - 1) {
+      s.appendChild(svgEl('text', { x: X(i), y: Y(p.value) - 8, 'text-anchor': i === pts.length - 1 && pts.length > 1 ? 'end' : (i === 0 && pts.length > 1 ? 'start' : 'middle'), class: 'v' }, fmtN(p.value, 1)));
+      s.appendChild(svgEl('text', { x: X(i), y: H - 8, 'text-anchor': i === 0 && pts.length > 1 ? 'start' : (pts.length > 1 ? 'end' : 'middle') }, p.label));
+    }
+  });
+  parent.appendChild(s);
+}
+// Medidor de IMC: escala 14–40 con marcador
+function mBmiGauge(parent, bmi, category) {
+  const W = 320, H = 70, L = 8, span = W - 2 * L, lo = 14, hi = 40;
+  const segs = [[14, 18.5, '#60a5fa', 'bajo peso'], [18.5, 25, '#34d399', 'normal'], [25, 30, '#fbbf24', 'sobrepeso'], [30, 40, '#f87171', 'obesidad']];
+  const X = v => L + span * (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo);
+  const s = svgRoot(W, H, `IMC ${bmi}${category ? ', ' + category : ''}`);
+  for (const [a, b, c] of segs) s.appendChild(svgEl('rect', { x: X(a), y: 30, width: X(b) - X(a), height: 14, fill: c, opacity: category ? .9 : .35 }));
+  for (const v of [18.5, 25, 30]) s.appendChild(svgEl('text', { x: X(v), y: 60, 'text-anchor': 'middle' }, String(v)));
+  const mx = X(bmi);
+  s.appendChild(svgEl('polygon', { points: `${mx - 6},20 ${mx + 6},20 ${mx},31`, fill: '#e8f4ff' }));
+  s.appendChild(svgEl('text', { x: Math.max(24, Math.min(W - 24, mx)), y: 14, 'text-anchor': 'middle', class: 'v' }, `IMC ${fmtN(bmi, 1)}`));
+  parent.appendChild(s);
+}
+// Escala con tramos de color y marcador: segs = [[desde, hasta, color], ...]
+function mScale(parent, value, lo, hi, segs, valueLabel, ticks, label) {
+  const W = 320, H = 70, L = 8, span = W - 2 * L;
+  const X = v => L + span * (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo);
+  const s = svgRoot(W, H, label);
+  for (const [a, b, c] of segs) s.appendChild(svgEl('rect', { x: X(a), y: 30, width: Math.max(1, X(b) - X(a)), height: 14, fill: c, opacity: .9 }));
+  for (const v of ticks || []) s.appendChild(svgEl('text', { x: X(v), y: 60, 'text-anchor': 'middle' }, String(v)));
+  const mx = X(value);
+  s.appendChild(svgEl('polygon', { points: `${mx - 6},20 ${mx + 6},20 ${mx},31`, fill: '#e8f4ff' }));
+  s.appendChild(svgEl('text', { x: Math.max(30, Math.min(W - 30, mx)), y: 14, 'text-anchor': 'middle', class: 'v' }, valueLabel));
+  parent.appendChild(s);
+}
+// Somatocarta: X = ecto − endo ; Y = 2·meso − (endo + ecto). pts = [{x, y}] (el primero es el más reciente)
+function mSomatochart(parent, pts, color) {
+  const W = 320, H = 270, L = 10, R = 10, T = 22, B = 22, x0 = -8, x1 = 8, y0 = -8, y1 = 14;
+  const X = v => L + (W - L - R) * (Math.max(x0, Math.min(x1, v)) - x0) / (x1 - x0);
+  const Y = v => T + (H - T - B) * (1 - (Math.max(y0, Math.min(y1, v)) - y0) / (y1 - y0));
+  const s = svgRoot(W, H, `Somatocarta: ${pts.length} medición(es); la última en X ${fmtN(pts[0].x, 1)}, Y ${fmtN(pts[0].y, 1)}`);
+  s.appendChild(svgEl('polygon', { points: `${X(-6)},${Y(-6)} ${X(6)},${Y(-6)} ${X(0)},${Y(12)}`, fill: color, opacity: .10, stroke: color, 'stroke-opacity': .5 }));
+  s.appendChild(svgEl('line', { x1: X(0), y1: Y(-8), x2: X(0), y2: Y(14), stroke: 'rgba(255,255,255,.18)' }));
+  s.appendChild(svgEl('line', { x1: X(-8), y1: Y(0), x2: X(8), y2: Y(0), stroke: 'rgba(255,255,255,.18)' }));
+  s.appendChild(svgEl('text', { x: X(-6), y: Y(-6) + 14, 'text-anchor': 'middle' }, 'ENDOMORFO'));
+  s.appendChild(svgEl('text', { x: X(6), y: Y(-6) + 14, 'text-anchor': 'middle' }, 'ECTOMORFO'));
+  s.appendChild(svgEl('text', { x: X(0), y: Y(12) - 6, 'text-anchor': 'middle' }, 'MESOMORFO'));
+  pts.slice(0, 8).reverse().forEach((p, i, arr) => {
+    const last = i === arr.length - 1;
+    s.appendChild(svgEl('circle', { cx: X(p.x), cy: Y(p.y), r: last ? 7 : 4, fill: last ? '#e8f4ff' : color, opacity: last ? 1 : .55, stroke: last ? color : 'none', 'stroke-width': 3 }));
+  });
+  parent.appendChild(s);
+}
+// Embudo: barras centradas decrecientes
+function mFunnel(parent, stages, color) {
+  const W = 320, rowH = 30, H = stages.length * rowH + 4, max = Math.max(1, stages[0].count);
+  const s = svgRoot(W, H, 'Embudo de ventas: ' + stages.map(x => `${x.name} ${x.count}`).join(', '));
+  stages.forEach((st, i) => {
+    const w = Math.max(24, (W - 8) * st.count / max), x = (W - w) / 2, y = i * rowH + 2;
+    s.appendChild(svgEl('rect', { x, y, width: w, height: rowH - 6, rx: 4, fill: color, opacity: 1 - i * 0.12 }));
+    const prev = i ? stages[i - 1].count : null;
+    const pct = prev ? ` · ${fmtN(100 * st.count / prev, 1)} %` : '';
+    s.appendChild(svgEl('text', { x: W / 2, y: y + 15, 'text-anchor': 'middle', style: 'fill:#fff;stroke:#04101c;stroke-width:3px;paint-order:stroke;font-weight:600' }, `${st.name}: ${fmtN(st.count, 0)}${pct}`));
+  });
+  parent.appendChild(s);
+}
+function when(ts) { return new Date(ts * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); }
+
+
+// ---- OmniaCore (lado del dispositivo): mide TU navegador; nada de esto se envía al servidor.
+const CORE = { info: null, fps: null, mode: 'auto' };
+function coreStoredMode() {
+  try { const v = localStorage.getItem('omnia_core_mode'); return ['auto', 'alto', 'medio', 'bajo'].includes(v) ? v : 'auto'; } catch (e) { return 'auto'; }
+}
+function coreRead() {
+  const nav = navigator, cn = nav.connection || {};
+  return {
+    cores: Number.isFinite(nav.hardwareConcurrency) ? nav.hardwareConcurrency : null,
+    memory: Number.isFinite(nav.deviceMemory) ? nav.deviceMemory : null,
+    reduced: !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches),
+    saveData: !!cn.saveData, net: typeof cn.effectiveType === 'string' ? cn.effectiveType : null,
+    screen: `${screen.width}×${screen.height}`,
+  };
+}
+function coreAutoTier(info, fps) {
+  if (info.reduced || info.saveData || info.net === 'slow-2g' || info.net === '2g') return 'bajo';
+  if (Number.isFinite(fps) && fps < 30) return 'bajo';
+  const c = info.cores === null ? 2 : info.cores, m = info.memory === null ? 2 : info.memory;
+  const score = (c >= 8 ? 2 : c >= 4 ? 1 : 0) + (m >= 8 ? 2 : m >= 4 ? 1 : 0);
+  const t = score >= 4 ? 'alto' : score >= 2 ? 'medio' : 'bajo';
+  return (Number.isFinite(fps) && fps < 45 && t === 'alto') ? 'medio' : t;
+}
+function coreTier() { return CORE.mode === 'auto' ? coreAutoTier(CORE.info || coreRead(), CORE.fps) : CORE.mode; }
+function coreApply() { document.documentElement.setAttribute('data-perf', coreTier()); }
+function coreMeasureFps(ms) {
+  return new Promise(res => {
+    if (document.hidden || !window.requestAnimationFrame) { res(null); return; }
+    let n = 0, t0 = null;
+    const step = t => {
+      if (t0 === null) t0 = t;
+      n++;
+      if (t - t0 >= ms) res(Math.round(1000 * (n - 1) / (t - t0))); else requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+async function coreMeasure() {
+  CORE.info = coreRead();
+  const f = await coreMeasureFps(1000);
+  if (f !== null) CORE.fps = Math.min(f, 240);
+  coreApply();
+}
+function coreInit() {
+  CORE.mode = coreStoredMode();
+  CORE.info = coreRead();
+  coreApply();
+  setTimeout(() => { coreMeasure(); }, 3500);     // medir cuando la página ya terminó de cargar
+}
+
+// ---- OmniaForge: pegar código y revisarlo (análisis estático; el servidor nunca lo ejecuta)
+const FORGE = { last: null };
+function forgeEditor(body, th) {
+  const p = mPanel(body, 'Revisar código Python');
+  const ta = modEl('textarea', 'mod-code');
+  ta.id = 'forgeCode'; ta.maxLength = 20000; ta.spellcheck = false;
+  ta.setAttribute('aria-label', 'Código Python a revisar');
+  ta.placeholder = 'Pega aquí tu código Python…';
+  const bar = modEl('div', 'mod-actions');
+  const go = modEl('button', 'mod-btn', 'Revisar (sin ejecutar)'); go.type = 'button';
+  const cnt = modEl('span', 'mod-sub', '0 / 20000');
+  bar.append(go, cnt);
+  const out = modEl('div'); out.setAttribute('aria-live', 'polite');
+  p.append(ta, bar, out, modEl('p', 'mod-sub', 'El código se analiza sin ejecutarse y no se guarda: solo queda un resumen numérico.'));
+  ta.addEventListener('input', () => { cnt.textContent = `${ta.value.length} / 20000`; });
+  const show = r => {
+    while (out.firstChild) out.removeChild(out.firstChild);
+    if (!r) return;
+    if (r.error) { out.appendChild(modEl('div', 'mod-empty', r.error)); return; }
+    if (!r.valid) {
+      const e = r.error_info || {};
+      out.appendChild(modEl('div', 'mod-empty', `Error de sintaxis en la línea ${e.line || '?'}: ${e.message || ''}`));
+      return;
+    }
+    const m = r.metrics || {};
+    mTiles(out, [[String(r.findings_total || 0), 'hallazgos'], [String(m.lines || 0), 'líneas'], [String(m.functions || 0), 'funciones'], [String(m.max_complexity || 0), 'complejidad máx.']]);
+    const ul = modEl('ul', 'mod-finds');
+    for (const f of (r.findings || []).slice(0, 30)) {
+      const sev = ['alto', 'medio', 'bajo'].includes(f.severity) ? f.severity : 'medio';
+      ul.appendChild(modEl('li', sev, `[${sev}] línea ${Number.isFinite(f.line) ? f.line : '?'}: ${typeof f.message === 'string' ? f.message : ''}`));
+    }
+    if (!ul.children.length) out.appendChild(modEl('div', 'mod-empty', 'Sin hallazgos. Eso no garantiza que el código sea correcto ni seguro: es una revisión automática básica.'));
+    else out.appendChild(ul);
+  };
+  if (FORGE.last) { ta.value = FORGE.last.code; cnt.textContent = `${ta.value.length} / 20000`; show(FORGE.last.result); }
+  go.addEventListener('click', async () => {
+    const code = ta.value;
+    if (!code.trim()) { show({ error: 'Pega primero algo de código.' }); return; }
+    go.disabled = true; go.textContent = 'Revisando…';
+    const res = await modApi('/api/forge/review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, language: 'python' }) });
+    go.disabled = false; go.textContent = 'Revisar (sin ejecutar)';
+    if (res.status === 401) { modFail(res); return; }
+    if (!res.ok || !res.data) {
+      const msg = res.status === 429 ? 'Demasiadas revisiones seguidas. Espera un momento.' : res.status === 413 ? 'El código es demasiado largo (máximo 20000 caracteres).'
+        : res.status === 403 ? 'Este módulo no está disponible para tu rango de edad.' : (res.data && res.data.message) || 'No se pudo revisar ahora mismo.';
+      show({ error: msg }); return;
+    }
+    const r = res.data;
+    if (r.valid === false && r.error) r.error_info = r.error, r.error = undefined;
+    FORGE.last = { code, result: r };
+    show(r);
+    if (r.saved) { announce('Revisión terminada.'); modRefreshForgeCharts(); }
+  });
+}
+async function modRefreshForgeCharts() {   // vuelve a dibujar las gráficas sin perder lo escrito
+  if (!$('modOverlay').classList.contains('show')) return;
+  const y = $('modOverlay').querySelector('.acct-box').scrollTop;
+  await modShowRecords('OmniaForge');
+  $('modOverlay').querySelector('.acct-box').scrollTop = y;
+}
+
+function coreView(body, th) {
+  const root = modEl('div'); body.appendChild(root);
+  const draw = () => {
+    while (root.firstChild) root.removeChild(root.firstChild);
+    const i = CORE.info || coreRead(), tier = coreTier(), fps = CORE.fps;
+    const names = { alto: 'Alto', medio: 'Medio', bajo: 'Ahorro' };
+    mTiles(root, [[names[tier], 'nivel aplicado ahora'], [i.cores === null ? '—' : String(i.cores), 'núcleos'],
+      [i.memory === null ? 'no informada' : `${i.memory}${i.memory >= 8 ? '+' : ''} GB`, 'memoria'], [i.screen, 'pantalla']]);
+    const p1 = mPanel(root, 'Fluidez medida en tu pantalla');
+    const row = modEl('div', 'mod-row2'); p1.appendChild(row);
+    const l = modEl('div'); row.appendChild(l);
+    if (fps === null) mRing(l, 0, th.c, '—', 'FPS', 'FPS aún sin medir');
+    else mRing(l, fps / 60, fps >= 45 ? th.c : (fps >= 30 ? '#fbbf24' : '#f87171'), String(fps), 'FPS', `${fps} cuadros por segundo`);
+    const r2 = modEl('div'); row.appendChild(r2);
+    mLegend(r2, [{ label: 'Movimiento reducido (sistema)', value: 0, color: th.c, text: i.reduced ? 'sí' : 'no' },
+      { label: 'Ahorro de datos', value: 0, color: th.c, text: i.saveData ? 'sí' : 'no' },
+      { label: 'Red', value: 0, color: th.c, text: i.net || 'no informada' }]);
+    const meas = modEl('button', 'mod-btn', 'Medir de nuevo'); meas.type = 'button';
+    meas.addEventListener('click', async () => { meas.disabled = true; meas.textContent = 'Midiendo…'; await coreMeasure(); draw(); });
+    r2.appendChild(meas);
+    const p2 = mPanel(root, 'Modo de rendimiento');
+    const seg = modEl('div', 'mod-seg'); p2.appendChild(seg);
+    for (const [v, label] of [['auto', 'Automático'], ['alto', 'Alto'], ['medio', 'Medio'], ['bajo', 'Ahorro']]) {
+      const b = modEl('button', 'mod-btn', label); b.type = 'button';
+      b.setAttribute('aria-pressed', String(CORE.mode === v));
+      b.addEventListener('click', () => { CORE.mode = v; try { localStorage.setItem('omnia_core_mode', v); } catch (e) { /* sin almacenamiento */ } coreApply(); draw(); });
+      seg.appendChild(b);
+    }
+    p2.appendChild(modEl('p', 'mod-sub', 'Alto: todo activo. Medio: sin desenfoques de fondo. Ahorro: sin desenfoques ni animaciones. En automático se elige según tus núcleos, tu memoria, tus FPS y tus ajustes del sistema.'));
+    p2.appendChild(modEl('p', 'mod-sub', 'Todo se mide en tu navegador y no se envía a ningún servidor. La delegación de cálculos a Edge/Cloud todavía no existe.'));
+  };
+  draw();
+  return true;
+}
+
+
+// Composición corporal (solo adultos): % de grasa y somatotipo estimado
+function nutriComposition(body, comp, th) {
+  const last = comp[0].payload, man = last.sex === 'hombre';
+  const segs = man ? [[2, 6, '#60a5fa'], [6, 14, '#34d399'], [14, 18, '#a3e635'], [18, 25, '#fbbf24'], [25, 40, '#f87171']]
+                   : [[10, 14, '#60a5fa'], [14, 21, '#34d399'], [21, 25, '#a3e635'], [25, 32, '#fbbf24'], [32, 45, '#f87171']];
+  const t = [[`${fmtN(last.body_fat, 1)} %`, 'grasa corporal'], [typeof last.fat_category === 'string' ? last.fat_category : '—', 'referencia general'],
+    [`${fmtN(pnum(last, 'waist_cm'), 0)} cm`, 'cintura']];
+  if (pnum(last, 'bmi') !== null) t.push([fmtN(last.bmi, 1), 'IMC']);
+  mTiles(body, t);
+  const p1 = mPanel(body, 'Porcentaje de grasa (método de circunferencias)');
+  mScale(p1, last.body_fat, segs[0][0], segs[segs.length - 1][1], segs, `${fmtN(last.body_fat, 1)} %`,
+    segs.slice(1).map(x => x[0]), `Porcentaje de grasa ${last.body_fat} por ciento`);
+  p1.appendChild(modEl('p', 'mod-sub', 'Tramos: grasa esencial, atlético, en forma, aceptable, obesidad (referencia general). Tiene un margen de error de varios puntos: úsalo para ver tu tendencia midiéndote siempre igual.'));
+  if (comp.length > 1) {
+    const p2 = mPanel(body, 'Evolución del % de grasa');
+    mLine(p2, comp.slice(0, 12).reverse().map(r => ({ label: when(r.created_at), value: r.payload.body_fat })), th.c, null, 'Evolución del porcentaje de grasa');
+  }
+  const som = comp.filter(r => pnum(r.payload, 'endo') !== null && pnum(r.payload, 'meso') !== null && pnum(r.payload, 'ecto') !== null
+                              && pnum(r.payload, 'chart_x') !== null && pnum(r.payload, 'chart_y') !== null);
+  if (som.length) {
+    const s0 = som[0].payload;
+    const p3 = mPanel(body, 'Somatotipo estimado');
+    const row = modEl('div', 'mod-row2'); p3.appendChild(row);
+    const l = modEl('div'); row.appendChild(l);
+    mSomatochart(l, som.map(r => ({ x: r.payload.chart_x, y: r.payload.chart_y })), th.c);
+    const r2 = modEl('div'); row.appendChild(r2);
+    mLegend(r2, [{ label: 'Endomorfia (adiposidad)', value: 0, color: '#fbbf24', text: fmtN(s0.endo, 1) },
+      { label: 'Mesomorfia (músculo-hueso)', value: 0, color: th.c, text: fmtN(s0.meso, 1) },
+      { label: 'Ectomorfia (linealidad)', value: 0, color: '#60a5fa', text: fmtN(s0.ecto, 1) }]);
+    if (typeof s0.somatotype === 'string') r2.appendChild(modEl('p', 'mod-sub', `Tipo: ${s0.somatotype}.`));
+    p3.appendChild(modEl('p', 'mod-sub', 'La ectomorfia usa la fórmula de Heath-Carter; endomorfia y mesomorfia son estimaciones con cinta y báscula, no una medición con plicómetro. El punto grande es tu última medición.'));
+  }
+}
+
+// ---- interfaces por módulo (recs: más nuevos primero)
+const MOD_VIEW = {
+  'NutriVida'(body, recs, th) {
+    const calc = byKind(recs, 'calculo').filter(r => pnum(r.payload, 'bmi') !== null);
+    const comp = byKind(recs, 'composicion').filter(r => pnum(r.payload, 'body_fat') !== null && (r.payload.sex === 'hombre' || r.payload.sex === 'mujer'));
+    if (!calc.length && !comp.length) return false;
+    if (comp.length) nutriComposition(body, comp, th);
+    if (!calc.length) return true;
+    const last = calc[0].payload;
+    const p1 = mPanel(body, 'Tu IMC');
+    mBmiGauge(p1, last.bmi, last.bmi_category || null);
+    p1.appendChild(modEl('p', 'mod-sub', last.bmi_category
+      ? `Clasificación para adultos: ${last.bmi_category}. Es una referencia general, no una valoración médica.`
+      : 'A tu edad el IMC se interpreta con percentiles según edad y sexo: aquí solo se muestra el valor.'));
+    const t = [[fmtN(last.bmi, 1), 'IMC'], [`${fmtN(pnum(last, 'weight_kg'), 1)} kg`, 'peso'], [`${fmtN(pnum(last, 'height_cm'), 0)} cm`, 'altura']];
+    if (pnum(last, 'water_glasses') !== null) t.push([`${last.water_glasses}`, 'vasos de 250 ml al día']);
+    if (pnum(last, 'daily_calories') !== null) t.push([fmtN(last.daily_calories, 0), 'kcal diarias (mantener)']);
+    mTiles(body, t);
+    if (calc.length > 1) {
+      const p2 = mPanel(body, 'Evolución del IMC');
+      const pts = calc.slice(0, 12).reverse().map(r => ({ label: when(r.created_at), value: r.payload.bmi }));
+      const adult = !!last.bmi_category;
+      mLine(p2, pts, th.c, adult ? [{ from: 14, to: 18.5, color: '#60a5fa' }, { from: 18.5, to: 25, color: '#34d399' },
+        { from: 25, to: 30, color: '#fbbf24' }, { from: 30, to: 40, color: '#f87171' }] : null, 'Evolución del IMC en el tiempo');
+      const wpts = calc.slice(0, 12).reverse().filter(r => pnum(r.payload, 'weight_kg') !== null);
+      if (wpts.length > 1) {
+        const p3 = mPanel(body, 'Evolución del peso (kg)');
+        mLine(p3, wpts.map(r => ({ label: when(r.created_at), value: r.payload.weight_kg })), th.c, null, 'Evolución del peso');
+      }
+    }
+    return true;
+  },
+
+  'OmniaChronos'(body, recs, th) {
+    const ends = byKind(recs, 'focus_end').filter(r => pnum(r.payload, 'elapsed_min') !== null && pnum(r.payload, 'started_at') !== null);
+    const starts = byKind(recs, 'focus_start');
+    const closed = new Set(ends.map(r => r.payload.start_id));
+    const open = starts.find(r => !closed.has(r.id));
+    if (!ends.length && !open) return false;
+    const days = lastDays(7), perDay = Object.fromEntries(days.map(d => [d.key, 0]));
+    let done = 0, early = 0, blocks7 = 0;
+    for (const r of ends) {
+      const k = dkey(new Date(r.payload.started_at * 1000));
+      if (k in perDay) {
+        perDay[k] += r.payload.elapsed_min; blocks7++;
+        if (r.payload.completed) done += r.payload.elapsed_min; else early += r.payload.elapsed_min;
+      }
+    }
+    const total7 = done + early, today = perDay[days[days.length - 1].key];
+    mTiles(body, [[`${fmtN(today, 0)} min`, 'enfoque hoy'], [`${fmtN(total7, 0)} min`, 'últimos 7 días'], [String(blocks7), 'bloques en 7 días'],
+      [blocks7 ? `${fmtN(total7 / blocks7, 0)} min` : '—', 'promedio por bloque']]);
+    if (open) body.appendChild(modEl('div', 'mod-empty', `Hay un bloque en curso desde las ${new Date(open.payload.started_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${open.payload.minutes} min). Dime «terminé el bloque» en el chat para cerrarlo.`));
+    const p1 = mPanel(body, 'Tiempo de enfoque — últimos 7 días');
+    const row = modEl('div', 'mod-row2'); p1.appendChild(row);
+    const left = modEl('div'); row.appendChild(left);
+    mDonut(left, [{ value: done, color: th.c }, { value: early, color: '#fbbf24' }], `${fmtN(total7, 0)}`, 'minutos', 'Minutos de enfoque en 7 días, completos y terminados antes de tiempo');
+    const right = modEl('div'); row.appendChild(right);
+    mLegend(right, [{ label: 'Bloques completos', value: done, color: th.c, text: `${fmtN(done, 0)} min` },
+      { label: 'Terminados antes de tiempo', value: early, color: '#fbbf24', text: `${fmtN(early, 0)} min` }]);
+    const p2 = mPanel(body, 'Minutos por día');
+    mBars(p2, days.map(d => ({ label: d.label, sub: String(d.day), value: perDay[d.key] })), th.c, 'min', 'Minutos de enfoque por día');
+    return true;
+  },
+
+  'OmniaHabits'(body, recs, th) {
+    const ch = byKind(recs, 'check').filter(r => typeof r.payload.day === 'string' && typeof r.payload.habit === 'string');
+    if (!ch.length) return false;
+    const daysDone = new Set(ch.map(r => r.payload.day));
+    const pts = ch.reduce((a, r) => a + (pnum(r.payload, 'points') || 0), 0);
+    let streak = 0; const d = new Date();
+    if (!daysDone.has(dkey(d))) d.setDate(d.getDate() - 1);          // hoy aún puede completarse
+    while (daysDone.has(dkey(d))) { streak++; d.setDate(d.getDate() - 1); }
+    mTiles(body, [[fmtN(pts, 0), 'puntos'], [`${streak} día(s)`, 'racha actual'], [String(daysDone.size), 'días con hábitos'], [String(ch.length), 'hábitos completados']]);
+    const p1 = mPanel(body, 'Puntos por día — últimos 14 días');
+    const days = lastDays(14), per = Object.fromEntries(days.map(x => [x.key, 0]));
+    for (const r of ch) if (r.payload.day in per) per[r.payload.day] += pnum(r.payload, 'points') || 0;
+    mBars(p1, days.map(x => ({ label: x.label, sub: String(x.day), value: per[x.key] })), th.c, 'pts', 'Puntos por día');
+    const p2 = mPanel(body, 'Hábitos más constantes');
+    const cnt = {};
+    for (const r of ch) cnt[r.payload.habit] = (cnt[r.payload.habit] || 0) + 1;
+    mHBars(p2, Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]).map(k => ({ label: HABIT_NAMES[k] || 'Hábito', value: cnt[k] })));
+    return true;
+  },
+
+  'OmniaAthletics'(body, recs, th, me) {
+    const ent = byKind(recs, 'entreno').filter(r => pnum(r.payload, 'minutes') !== null);
+    const rut = byKind(recs, 'rutina');
+    if (!ent.length && !rut.length) return false;
+    const days = lastDays(7), per = Object.fromEntries(days.map(d => [d.key, 0]));
+    let wk = 0, ses = 0;
+    for (const r of ent) {
+      const k = dkey(new Date(r.created_at * 1000));
+      if (k in per) { per[k] += r.payload.minutes; wk += r.payload.minutes; ses++; }
+    }
+    const adult = !me || me.age_band === 'adult', target = adult ? 150 : 420;
+    mTiles(body, [[`${fmtN(wk, 0)} min`, 'esta semana'], [String(ses), 'sesiones en 7 días'], [String(ent.length), 'sesiones registradas']]);
+    if (ent.length) {
+      const p1 = mPanel(body, 'Meta semanal de actividad');
+      const row = modEl('div', 'mod-row2'); p1.appendChild(row);
+      const l = modEl('div'); row.appendChild(l);
+      mRing(l, wk / target, th.c, `${Math.min(100, Math.round(100 * wk / target))} %`, `de ${target} min`, `${fmtN(wk, 0)} de ${target} minutos semanales`);
+      const r2 = modEl('div'); row.appendChild(r2);
+      r2.appendChild(modEl('p', 'mod-sub', adult ? 'Referencia general (OMS): al menos 150 minutos de actividad moderada por semana.'
+        : 'Referencia general (OMS) para tu edad: unos 60 minutos de actividad al día (420 por semana).'));
+      const p2 = mPanel(body, 'Minutos por día');
+      mBars(p2, days.map(d => ({ label: d.label, sub: String(d.day), value: per[d.key] })), th.c, 'min', 'Minutos de entrenamiento por día');
+    }
+    if (rut.length) {
+      const q = rut[0].payload, p3 = mPanel(body, 'Tu última rutina'), chips = modEl('div', 'mod-chips');
+      for (const k of ['days', 'level', 'goal', 'place']) if (q[k] !== undefined && q[k] !== null) chips.appendChild(modEl('span', 'mod-chip', k === 'days' ? `${q[k]} días` : String(q[k])));
+      p3.appendChild(chips);
+    }
+    return true;
+  },
+
+  'OmniaStudio'(body, recs, th) {
+    const pal = byKind(recs, 'paleta'), ilu = byKind(recs, 'iluminacion'), pr = byKind(recs, 'prompt');
+    if (!pal.length && !ilu.length && !pr.length) return false;
+    mTiles(body, [[String(pal.length), 'paletas'], [String(ilu.length), 'iluminaciones'], [String(pr.length), 'prompts']]);
+    const p1 = mPanel(body, 'Qué has creado');
+    const row = modEl('div', 'mod-row2'); p1.appendChild(row);
+    const l = modEl('div'); row.appendChild(l);
+    mDonut(l, [{ value: pal.length, color: th.c }, { value: ilu.length, color: '#f0abfc' }, { value: pr.length, color: '#67e8f9' }],
+      String(pal.length + ilu.length + pr.length), 'creaciones', 'Creaciones por tipo');
+    const r2 = modEl('div'); row.appendChild(r2);
+    mLegend(r2, [{ label: 'Paletas', value: pal.length, color: th.c, text: String(pal.length) },
+      { label: 'Iluminaciones', value: ilu.length, color: '#f0abfc', text: String(ilu.length) },
+      { label: 'Prompts', value: pr.length, color: '#67e8f9', text: String(pr.length) }]);
+    const bases = [...new Set(pal.map(r => r.payload.base).filter(b => typeof b === 'string' && HEX6.test(b)))].slice(0, 10);
+    if (bases.length) {
+      const p2 = mPanel(body, 'Colores base de tus paletas'), sw = modEl('div', 'mod-swatches');
+      for (const b of bases) { const w = modEl('div', 'mod-swatch'), i = modEl('i'); i.style.background = b; w.append(i, document.createTextNode(b.toUpperCase())); sw.appendChild(w); }
+      p2.appendChild(sw);
+    }
+    const sc = {};
+    for (const r of [...ilu, ...pr]) if (typeof r.payload.scheme === 'string') sc[r.payload.scheme] = (sc[r.payload.scheme] || 0) + 1;
+    const keys = Object.keys(sc).sort((a, b) => sc[b] - sc[a]).slice(0, 8);
+    if (keys.length) mHBars(mPanel(body, 'Esquemas de iluminación más usados'), keys.map(k => ({ label: k, value: sc[k] })));
+    return true;
+  },
+
+  'OmniaForge'(body, recs, th) {
+    forgeEditor(body, th);
+    const rv = byKind(recs, 'revision');
+    if (!rv.length) return true;
+    const last = rv[0].payload, sev = last.sev || {};
+    const lines = rv.reduce((a, r) => a + (pnum(r.payload, 'lines') || 0), 0);
+    mTiles(body, [[String(rv.length), 'revisiones'], [fmtN(lines, 0), 'líneas revisadas'], [String(pnum(last, 'findings') ?? 0), 'hallazgos (última)'],
+      [String(pnum(last, 'max_complexity') ?? 0), 'complejidad máx. (última)']]);
+    const p1 = mPanel(body, 'Hallazgos de la última revisión');
+    const row = modEl('div', 'mod-row2'); p1.appendChild(row);
+    const l = modEl('div'); row.appendChild(l);
+    const a = pnum(sev, 'alto') || 0, m = pnum(sev, 'medio') || 0, b = pnum(sev, 'bajo') || 0;
+    mDonut(l, [{ value: a, color: '#f87171' }, { value: m, color: th.c }, { value: b, color: '#60a5fa' }], String(a + m + b), 'hallazgos', 'Hallazgos por gravedad');
+    const r2 = modEl('div'); row.appendChild(r2);
+    mLegend(r2, [{ label: 'Alta', value: a, color: '#f87171', text: String(a) }, { label: 'Media', value: m, color: th.c, text: String(m) },
+      { label: 'Baja', value: b, color: '#60a5fa', text: String(b) }]);
+    if (last.valid === false) p1.appendChild(modEl('p', 'mod-sub', 'La última revisión tenía un error de sintaxis.'));
+    if (rv.length > 1) {
+      const p2 = mPanel(body, 'Hallazgos por revisión (últimas 10)');
+      mBars(p2, rv.slice(0, 10).reverse().map((r, i) => ({ label: `#${i + 1}`, value: pnum(r.payload, 'findings') || 0, color: (r.payload.valid === false ? '#f87171' : th.c) })),
+        th.c, '', 'Hallazgos por revisión');
+    }
+    p1.appendChild(modEl('p', 'mod-sub', 'Solo se guarda este resumen numérico: nunca tu código.'));
+    return true;
+  },
+
+  'OmniaCore'(body, recs, th) { return coreView(body, th); },
+
+  'Corporal Verified'(body, recs, th) { corporalView(body, th); return true; },
+
+  'OmniaEngine'(body, recs, th) {
+    const qs = byKind(recs, 'cotizacion').filter(r => pnum(r.payload, 'total') !== null);
+    const fs = byKind(recs, 'embudo').filter(r => Array.isArray(r.payload.stages) && r.payload.stages.length);
+    if (!qs.length && !fs.length) return false;
+    const money = v => `$${fmtN(v, 2, true)}`;
+    if (qs.length) {
+      const q = qs[0].payload;
+      mTiles(body, [[money(q.total), 'última cotización'], [money(pnum(q, 'subtotal')), 'subtotal'], [money(pnum(q, 'vat')), `IVA ${fmtN(pnum(q, 'vat_percent'), 1)} %`], [String(qs.length), 'cotizaciones']]);
+      const p1 = mPanel(body, 'Totales de tus cotizaciones (USD)');
+      mBars(p1, qs.slice(0, 8).reverse().map(r => ({ label: when(r.created_at), value: r.payload.total })), th.c, '$', 'Total de cada cotización', 2);
+      const lines = Array.isArray(q.lines) ? q.lines.filter(x => x && typeof x.name === 'string' && Number.isFinite(x.total)).slice(0, 8) : [];
+      if (lines.length) {
+        const p2 = mPanel(body, 'Conceptos de la última cotización');
+        mHBars(p2, lines.map(x => ({ label: x.name, value: x.total })), 0, money);
+      }
+    }
+    if (fs.length) {
+      const f = fs[0].payload, st = f.stages.filter(x => x && typeof x.name === 'string' && Number.isFinite(x.count)).slice(0, 8);
+      if (st.length) {
+        const p3 = mPanel(body, 'Tu último embudo de ventas');
+        mFunnel(p3, st, th.c);
+        const t = [];
+        if (pnum(f, 'cac') !== null) t.push([money(f.cac), 'costo por cliente (CAC)']);
+        if (pnum(f, 'revenue') !== null) t.push([money(f.revenue), 'ingresos']);
+        if (pnum(f, 'roi_pct') !== null) t.push([`${fmtN(f.roi_pct, 1)} %`, 'ROI']);
+        if (t.length) mTiles(p3, t);
+      }
+    }
+    return true;
+  },
+};
+
+function modNoData(body, name) {
+  const th = MOD_THEME[name] || { hint: '' };
+  const own = (th.hint || '').startsWith('Este módulo todavía no guarda');
+  body.appendChild(modEl('div', 'mod-empty', own ? th.hint : `Todavía no hay datos de este módulo. ${th.hint || ''}`));
+}
+
+async function modShowList() {
+  modMsg('Cargando…');
+  const res = await modApi('/api/account/modules');
+  if (!$('modOverlay').classList.contains('show')) return;
+  if (!res.ok || !res.data || !Array.isArray(res.data.modules)) { modFail(res); return; }
+  modMsg('');
+  modClear();
+  $('modTitle').textContent = 'Mis módulos';
+  $('modOverlay').querySelector('.mod-box').style.removeProperty('--mc');
+  const ul = modEl('ul', 'mod-grid');
+  for (const m of res.data.modules) {
+    if (typeof m.name !== 'string') continue;
+    const th = MOD_THEME[m.name] || { c: '#00c8ff', ico: '▦', tag: '' };
+    const li = modEl('li');
+    const btn = modEl('button', 'mod-card-sel');
+    btn.type = 'button';
+    btn.style.setProperty('--mc', th.c);
+    btn.disabled = !m.allowed;
+    btn.setAttribute('aria-label', `Abrir ${m.name}`);
+    const n = Number.isFinite(m.records) ? m.records : 0;
+    btn.append(modEl('span', 'mod-ico', th.ico), modEl('span', 'mod-name', m.name), modEl('span', 'mod-tag', th.tag),
+      modEl('span', 'mod-sub', m.allowed ? `${n} registro(s)` : 'No disponible para tu rango de edad'));
+    btn.addEventListener('click', () => modShowRecords(m.name));
+    li.appendChild(btn);
+    ul.appendChild(li);
+  }
+  $('modBody').appendChild(ul);
+}
+
+async function modShowRecords(name) {
+  modMsg('Cargando…');
+  const res = await modApi(`/api/account/modules/${encodeURIComponent(name)}/records?limit=500`);
+  if (!$('modOverlay').classList.contains('show')) return;
+  if (!res.ok || !res.data || !Array.isArray(res.data.records)) { modFail(res); return; }
+  modMsg('');
+  modClear();
+  const th = MOD_THEME[name] || { c: '#00c8ff', ico: '▦', tag: '', hint: '' };
+  $('modOverlay').querySelector('.mod-box').style.setProperty('--mc', th.c);
+  $('modTitle').textContent = name;
+  const recs = res.data.records;
+  const body = $('modBody');
+  const actions = modEl('div', 'mod-actions');
+  const back = modEl('button', 'mod-btn', '← Volver');
+  back.type = 'button';
+  back.addEventListener('click', modShowList);
+  const del = modEl('button', 'mod-btn danger', 'Borrar los datos de este módulo');
+  del.type = 'button';
+  del.disabled = recs.length === 0;
+  del.addEventListener('click', () => modDelete(name));
+  actions.append(back, del);
+  body.appendChild(actions);
+
+  const ban = modEl('div', 'mod-banner');
+  const info = modEl('div');
+  info.append(modEl('div', 'mod-name', `${th.tag || name}`), modEl('div', 'mod-sub', name === 'OmniaCore' ? 'Se mide en tu pantalla; no guarda registros' : `${recs.length} registro(s) guardados`));
+  ban.append(modEl('span', 'mod-ico', th.ico), info);
+  body.appendChild(ban);
+
+  let drawn = false;
+  const view = MOD_VIEW[name];
+  if (view && (recs.length || name === 'OmniaCore' || name === 'OmniaForge' || name === 'Corporal Verified')) {
+    try { drawn = view(body, recs, th, ACCT.me) === true; } catch (e) { drawn = false; }
+  }
+  if (!drawn) modNoData(body, name);
+
+  if (recs.length) {
+    const det = modEl('details', 'mod-details');
+    det.appendChild(modEl('summary', '', `Ver los ${recs.length} registro(s) uno por uno`));
+    const wrap = modEl('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin-top:6px';
+    for (const r of recs.slice(0, 100)) {
+      const box = modEl('div', 'mod-rec');
+      const t = Number.isFinite(r.created_at) ? new Date(r.created_at * 1000).toLocaleString() : '';
+      box.appendChild(modEl('time', '', `${t} · ${typeof r.kind === 'string' ? r.kind : ''}`));
+      const p = r.payload && typeof r.payload === 'object' ? r.payload : {};
+      box.appendChild(modEl('span', '', Object.keys(p).map(k => `${k}: ${typeof p[k] === 'object' ? JSON.stringify(p[k]) : p[k]}`).join(' · ')));
+      wrap.appendChild(box);
+    }
+    det.appendChild(wrap);
+    body.appendChild(det);
+  }
+  back.focus();
+}
+
+// ==================== CORPORAL: VERIFICACIÓN DE ADULTOS (2026-11-15) ====================
+// Solo mayores de 18 años. Los documentos los revisa una persona; se borran 24 h después de aprobar.
+const CORP_TIERS = {
+  adult: { label: 'Adulto', docs: [['id_doc', 'Foto de tu cédula o documento de identidad'], ['face', 'Foto de tu rostro']] },
+  adult_student: { label: 'Adulto estudiante (18 a 25 años)', docs: [['id_doc', 'Foto de tu cédula o documento de identidad'], ['face', 'Foto de tu rostro'], ['student_doc', 'Documento oficial de la universidad (por ejemplo, el ingreso a una carrera)']] },
+};
+const CORP_STATUS = { pending: 'En revisión', approved: 'Verificado', rejected: 'Rechazado', expired: 'Expirado (sin revisar)', none: 'Sin verificar' };
+
+async function corporalView(body, th) {
+  const box = modEl('div', 'mod-panel');
+  box.style.cssText = 'display:flex;flex-direction:column;gap:10px;margin-top:10px';
+  body.appendChild(box);
+  const res = await modApi('/api/corporal/verification');
+  if (!res.ok || !res.data) { box.appendChild(modEl('p', 'mod-sub', (res.data && res.data.message) || 'No se pudo cargar tu verificación.')); return; }
+  corporalRender(box, res.data);
+}
+
+function corporalRender(box, st) {
+  while (box.firstChild) box.removeChild(box.firstChild);
+  box.appendChild(modEl('div', 'mod-name', 'Estado: ' + (CORP_STATUS[st.status] || 'Sin verificar')));
+  if (st.status === 'approved') {
+    box.appendChild(modEl('p', 'mod-sub', 'Nivel: ' + (st.access === 'adult_student' ? 'Adulto estudiante' : 'Adulto') + '. Ya puedes usar Corporal desde el chat.'));
+    corporalConsent(box, st);
+    return;
+  }
+  if (st.status === 'pending') {
+    box.appendChild(modEl('p', 'mod-sub', 'Tus documentos están en revisión. Pueden pasar unos días; se borran si nadie los revisa en 7 días.'));
+    return;
+  }
+  if (st.status === 'rejected') box.appendChild(modEl('p', 'mod-sub', 'La solicitud anterior fue rechazada y sus imágenes ya se borraron. Puedes intentarlo de nuevo.'));
+  if (st.status === 'expired') box.appendChild(modEl('p', 'mod-sub', 'La solicitud expiró sin revisión y sus imágenes se borraron. Puedes enviarla de nuevo.'));
+  box.appendChild(modEl('p', 'mod-sub', 'Corporal es solo para personas mayores de 18 años. Las imágenes se usan únicamente para verificarte, las revisa una persona y se borran 24 horas después de aprobar (o al rechazar).'));
+  const form = modEl('form');
+  form.style.cssText = 'display:flex;flex-direction:column;gap:8px';
+  const tierSel = modEl('select'); tierSel.setAttribute('aria-label', 'Nivel');
+  for (const k of Object.keys(CORP_TIERS)) { const o = modEl('option', '', CORP_TIERS[k].label); o.value = k; tierSel.appendChild(o); }
+  const birth = modEl('input'); birth.type = 'date'; birth.required = true; birth.setAttribute('aria-label', 'Fecha de nacimiento');
+  const files = modEl('div'); files.style.cssText = 'display:flex;flex-direction:column;gap:6px';
+  const inputs = {};
+  function drawFiles() {
+    while (files.firstChild) files.removeChild(files.firstChild);
+    for (const k of Object.keys(inputs)) delete inputs[k];
+    for (const [key, label] of CORP_TIERS[tierSel.value].docs) {
+      const lab = modEl('label', 'mod-sub', label + ' (JPG, PNG o WebP, máx. 5 MB)');
+      lab.style.cssText = 'display:flex;flex-direction:column;gap:3px';
+      const inp = modEl('input'); inp.type = 'file'; inp.accept = 'image/jpeg,image/png,image/webp'; inp.required = true;
+      inputs[key] = inp; lab.appendChild(inp); files.appendChild(lab);
+    }
+  }
+  tierSel.addEventListener('change', drawFiles);
+  drawFiles();
+  const bl = modEl('label', 'mod-sub', 'Fecha de nacimiento (como en tu documento)'); bl.style.cssText = 'display:flex;flex-direction:column;gap:3px'; bl.appendChild(birth);
+  const send = modEl('button', 'mod-btn', 'Enviar para revisión'); send.type = 'submit';
+  const msg = modEl('p', 'mod-sub'); msg.setAttribute('role', 'status');
+  form.append(tierSel, bl, files, send, msg);
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const fd = new FormData();
+    fd.append('tier', tierSel.value);
+    fd.append('birth_date', birth.value);
+    for (const k of Object.keys(inputs)) { if (inputs[k].files[0]) fd.append(k, inputs[k].files[0]); }
+    send.disabled = true; msg.textContent = 'Enviando…';
+    const r = await modApi('/api/corporal/verification', { method: 'POST', body: fd });
+    send.disabled = false;
+    if (r.ok && r.data) { corporalRender(box, r.data); return; }
+    msg.textContent = r.status === 413 ? 'Las imágenes son demasiado pesadas (máx. 5 MB cada una).'
+      : r.status === 429 ? 'Demasiados intentos. Espera un rato.' : ((r.data && r.data.message) || 'No se pudo enviar.');
+  });
+  box.appendChild(form);
+}
+
+function corporalConsent(box, st) {
+  const sec = modEl('div'); sec.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin-top:6px';
+  sec.appendChild(modEl('div', 'mod-name', 'Medida sensible (opcional)'));
+  sec.appendChild(modEl('p', 'mod-sub', st.consent_text || ''));
+  const msg = modEl('p', 'mod-sub'); msg.setAttribute('role', 'status');
+  const btn = modEl('button', 'mod-btn' + (st.intimate_measure_consent ? ' danger' : ''), st.intimate_measure_consent ? 'Retirar mi consentimiento' : 'Acepto, quiero poder registrar esta medida');
+  btn.type = 'button';
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const r = st.intimate_measure_consent
+      ? await modApi('/api/corporal/consent', { method: 'DELETE' })
+      : await modApi('/api/corporal/consent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: st.consent_version }) });
+    if (r.ok && r.data) { corporalRender(box, r.data); return; }
+    btn.disabled = false;
+    msg.textContent = (r.data && r.data.message) || 'No se pudo guardar.';
+  });
+  sec.append(btn, msg);
+  box.appendChild(sec);
+}
+
+async function modDelete(name) {
+  if (!window.confirm(`¿Borrar TODOS los datos que ${name} guardó de ti? No se puede deshacer.`)) return;
+  modMsg('Borrando…');
+  const res = await modApi(`/api/account/modules/${encodeURIComponent(name)}/records`, {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }),
+  });
+  if (!res.ok) { modFail(res); return; }
+  announce(`Datos de ${name} borrados.`);
+  await modShowRecords(name);
+  modMsg(`Se borraron ${res.data && Number.isFinite(res.data.deleted) ? res.data.deleted : 0} registro(s) de ${name}.`);
+}
+
 // ==================== EVENTS ====================
 $('sendBtn').addEventListener('click', send);
+$('modBtn').addEventListener('click', modOpen);
+$('modClose').addEventListener('click', modClose);
 $('chatInput').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 setupVoiceToggle();
+coreInit();
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => { /* sin service worker: la app funciona igual */ }); });
+}
 setupMicButton();
 initVoices();
 
@@ -1905,6 +3063,7 @@ function updateChatGate() {
 
 function renderAccountButton() {
   const b = $('acctBtn');
+  if (!ACCT.me) { ecoCloseFocus(); modClose(); }   // v3.2: sin sesión no queda nada abierto
   if (ACCT.me) {
     const p = ACCT.me;
     const label = p.display_name || String(p.email || '').split('@')[0] || 'CUENTA';
@@ -2263,7 +3422,7 @@ setupAccount();
 async function boot() {
   const {bubble:b1} = addMsg('omnia');
   await typewrite(b1,
-    `OMNIA MENTIS CORE INTERFACE v3.1\nIniciando enlace con el servidor en ${API.replace('http://', '')}...`, 10);
+    `OMNIA MENTIS CORE INTERFACE v3.2\nIniciando enlace con el servidor en ${API.replace('http://', '')}...`, 10);
 
   const ok = await checkHealth();
   syslog(ok ? 'API conectada' : 'API sin respuesta', ok?'ok':'err');

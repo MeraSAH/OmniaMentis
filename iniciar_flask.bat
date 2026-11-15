@@ -2,8 +2,9 @@
 :: ==========================================
 :: UBICACIÓN: OmniaMentis/iniciar_flask.bat
 :: PROPÓSITO: Iniciar la API de Omnia Mentis con Flask
-:: FECHA: 2026-06-14
-:: USO: Ejecutar desde C:\Users\Usuario\OmniaMentis
+:: FECHA: 2026-06-14 (actualizado 2026-10-10)
+:: USO: doble clic o ejecutar desde cualquier carpeta; usa la carpeta donde
+::      está este archivo (ya no depende de C:\Users\Usuario\OmniaMentis)
 :: ==========================================
 
 echo.
@@ -12,7 +13,7 @@ echo   OMNIA MENTIS API Flask - INICIANDO
 echo ================================================
 echo.
 
-cd /d C:\Users\Usuario\OmniaMentis
+cd /d "%~dp0"
 
 if not exist "src\api\main_flask.py" (
     echo [ERROR] src\api\main_flask.py no encontrado
