@@ -1517,10 +1517,12 @@ class TestCorporalVerification:
         assert r.status_code == 200, r.get_json()
         return {"Authorization": "Bearer " + r.get_json()["token"]}
 
-    def _submit(self, c, tier="adult", birth="1990-05-05", files=None, keep_limit=False):
+    def _submit(self, c, tier="adult", birth="1990-05-05", files=None, keep_limit=False, consent=True):
         if not keep_limit:
             sys.modules["api.main_flask"]._account_rate.clear()
         data = {"tier": tier, "birth_date": birth}
+        if consent:
+            data["docs_consent_version"] = "2026-11-16"
         files = files if files is not None else {"id_doc": _JPG, "face": _PNG}
         for k, v in files.items():
             data[k] = (io.BytesIO(v), k + ".bin")
@@ -1580,6 +1582,17 @@ class TestCorporalVerification:
         r = self._submit(c, tier="adult_student", birth="2003-05-05",
                          files={"id_doc": _JPG, "face": _PNG, "student_doc": _WEBP})
         assert r.status_code == 201 and r.get_json()["tier"] == "adult_student"
+
+    def test_submit_requires_docs_consent_and_records_it(self, env):
+        app, store, tmp = env
+        c = _authed(app)
+        r = self._submit(c, consent=False)
+        assert r.status_code == 400 and "documentos" in r.get_json()["message"]
+        assert os.listdir(tmp / "vf") == []
+        assert self._submit(c).status_code == 201
+        import sqlite3
+        assert sqlite3.connect(store._db_path).execute("SELECT docs_consent FROM verifications").fetchone()[0] == "2026-11-16"
+        assert "documento de identidad" in c.get("/api/corporal/verification").get_json()["docs_consent_text"]
 
     def test_submit_is_rate_limited(self, env):
         app, _, _ = env

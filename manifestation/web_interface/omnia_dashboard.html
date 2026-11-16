@@ -2918,14 +2918,18 @@ function corporalRender(box, st) {
   tierSel.addEventListener('change', drawFiles);
   drawFiles();
   const bl = modEl('label', 'mod-sub', 'Fecha de nacimiento (como en tu documento)'); bl.style.cssText = 'display:flex;flex-direction:column;gap:3px'; bl.appendChild(birth);
+  const consentLab = modEl('label', 'mod-sub'); consentLab.style.cssText = 'display:flex;gap:8px;align-items:flex-start';
+  const consentBox = modEl('input'); consentBox.type = 'checkbox'; consentBox.required = true;
+  consentLab.append(consentBox, modEl('span', '', st.docs_consent_text || ''));
   const send = modEl('button', 'mod-btn', 'Enviar para revisión'); send.type = 'submit';
   const msg = modEl('p', 'mod-sub'); msg.setAttribute('role', 'status');
-  form.append(tierSel, bl, files, send, msg);
+  form.append(tierSel, bl, files, consentLab, send, msg);
   form.addEventListener('submit', async ev => {
     ev.preventDefault();
     const fd = new FormData();
     fd.append('tier', tierSel.value);
     fd.append('birth_date', birth.value);
+    if (consentBox.checked) fd.append('docs_consent_version', st.docs_consent_version);
     for (const k of Object.keys(inputs)) { if (inputs[k].files[0]) fd.append(k, inputs[k].files[0]); }
     send.disabled = true; msg.textContent = 'Enviando…';
     const r = await modApi('/api/corporal/verification', { method: 'POST', body: fd });

@@ -34,6 +34,7 @@ REJECT_WINDOW = timedelta(days=30)
 REQUIRED = {"adult": ("id_doc", "face"), "adult_student": ("id_doc", "face", "student_doc")}
 CONSENT_KINDS = ("intimate_measure",)
 CONSENT_TEXT_VERSION = "2026-11-15"
+DOCS_CONSENT_VERSION = "2026-11-16"     # texto de tratamiento de documentos de verificación (privacidad.html, anexo Corporal)
 
 
 class VerificationError(ValueError):
@@ -88,7 +89,11 @@ class VerificationStore:
             c.execute("""CREATE TABLE IF NOT EXISTS verifications(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, tier TEXT NOT NULL,
                 status TEXT NOT NULL, created_at TEXT NOT NULL, decided_at TEXT, decided_by TEXT,
-                reject_reason TEXT, student_until TEXT, declared_birth TEXT, purge_at TEXT NOT NULL, images_purged INTEGER NOT NULL DEFAULT 0)""")
+                reject_reason TEXT, student_until TEXT, declared_birth TEXT, docs_consent TEXT, purge_at TEXT NOT NULL, images_purged INTEGER NOT NULL DEFAULT 0)""")
+            try:        # bases creadas antes de esta versión
+                c.execute("ALTER TABLE verifications ADD COLUMN docs_consent TEXT")
+            except sqlite3.OperationalError:
+                pass
             c.execute("""CREATE TABLE IF NOT EXISTS vimages(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, vid INTEGER NOT NULL, kind TEXT NOT NULL,
                 fname TEXT NOT NULL, ext TEXT NOT NULL)""")
@@ -103,8 +108,9 @@ class VerificationStore:
 
     # ------------------------------------------------------------------ solicitud
     def submit(self, account_id: str, tier: str, birth_date: date, images: Dict[str, bytes],
-               now: Optional[datetime] = None) -> int:
-        """Crea una solicitud pendiente. La fecha de nacimiento declarada se guarda SOLO mientras la solicitud está
+               now: Optional[datetime] = None, docs_consent_version: Optional[str] = None) -> int:
+        """Crea una solicitud pendiente. docs_consent_version: versión del texto sobre el tratamiento de los
+        documentos que la persona aceptó (se guarda como prueba del consentimiento; la API lo exige). La fecha de nacimiento declarada se guarda SOLO mientras la solicitud está
         pendiente (el revisor la compara con la cédula) y se borra al decidir o expirar."""
         now = _utc(now)
         if not account_id or not isinstance(account_id, str):
@@ -141,10 +147,10 @@ class VerificationStore:
                           (account_id, since)).fetchone()[0]
             if n >= MAX_REJECTIONS:
                 raise VerificationError("Demasiados rechazos recientes. Inténtalo más adelante.")
-            cur = c.execute("INSERT INTO verifications(account_id,tier,status,created_at,declared_birth,purge_at) "
-                            "VALUES(?,?,?,?,?,?)",
+            cur = c.execute("INSERT INTO verifications(account_id,tier,status,created_at,declared_birth,purge_at,docs_consent) "
+                            "VALUES(?,?,?,?,?,?,?)",
                             (account_id, tier, "pending", _iso(now), birth_date.isoformat(),
-                             _iso(now + PENDING_TTL)))
+                             _iso(now + PENDING_TTL), docs_consent_version))
             vid = cur.lastrowid
             written: List[str] = []
             try:

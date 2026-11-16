@@ -260,3 +260,20 @@ class TestDeleteAccountData:
 
     def test_unknown_account_is_noop(self, vs):
         assert vs.delete_account_data("nadie") == 0
+
+
+class TestSchemaMigrationAndConsentRecord:
+    def test_old_database_gets_docs_consent_column(self, tmp_path):
+        import sqlite3
+        db = str(tmp_path / "old.db")
+        con = sqlite3.connect(db)
+        con.execute("""CREATE TABLE verifications(id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL,
+            tier TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, decided_at TEXT, decided_by TEXT,
+            reject_reason TEXT, student_until TEXT, declared_birth TEXT, purge_at TEXT NOT NULL,
+            images_purged INTEGER NOT NULL DEFAULT 0)""")
+        con.commit()
+        con.close()
+        vs = VerificationStore(db, str(tmp_path / "f"))
+        vs.submit("a", "adult", date(1990, 1, 1), ADULT_IMGS, T0, docs_consent_version="2026-11-16")
+        assert sqlite3.connect(db).execute("SELECT docs_consent FROM verifications").fetchone()[0] == "2026-11-16"
+        VerificationStore(db, str(tmp_path / "f"))        # abrir de nuevo no falla

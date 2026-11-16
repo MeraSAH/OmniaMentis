@@ -247,7 +247,7 @@ from living_memory.gestation_diary import GestationDiary
 from analytics.research_analytics import ResearchAnalytics
 from router.integration import route_or_none, get_registered_modules, set_auth_checker
 from core.verification.verification import (VerificationStore, VerificationError, CONSENT_TEXT_VERSION,
-                                            MAX_IMAGE_BYTES, REQUIRED as _VERIF_REQUIRED)
+                                            MAX_IMAGE_BYTES, DOCS_CONSENT_VERSION, REQUIRED as _VERIF_REQUIRED)
 from router.policy import MODULE_MIN_AGE_BAND, module_allowed
 
 # ==================== LOGGING ====================
@@ -1811,6 +1811,14 @@ INTIMATE_CONSENT_TEXT = (
 )
 
 
+DOCS_CONSENT_TEXT = (
+    "Autorizo que OmniaMentis reciba la foto de mi documento de identidad y de mi rostro (y, si pido el nivel "
+    "estudiante, el documento de mi universidad) solo para comprobar que soy mayor de edad. Una persona las revisará "
+    "a mano; se borrarán a las 24 horas de aprobarlas, al instante si las rechaza, o a los 7 días si nadie las revisa. "
+    "Solo se conserva el resultado de la verificación. Puedo pedir que se borre todo eliminando mi cuenta."
+)
+
+
 def _verification_context():
     """(account_id, store, None) o (None, None, respuesta de error). Exige cuenta adulta."""
     aid, err = _login_required()
@@ -1835,6 +1843,8 @@ def _verification_state(aid: str, store) -> Dict[str, Any]:
         "intimate_measure_consent": store.can_use_intimate_measure(aid),
         "consent_text": INTIMATE_CONSENT_TEXT,
         "consent_version": CONSENT_TEXT_VERSION,
+        "docs_consent_version": DOCS_CONSENT_VERSION,
+        "docs_consent_text": DOCS_CONSENT_TEXT,
     }
 
 
@@ -1865,6 +1875,8 @@ def corporal_verification_submit():
     if length is None or length > VERIFICATION_MAX_BODY:
         return jsonify({"error": "payload_too_large",
                         "message": "Cada imagen debe pesar 5 MB o menos."}), 413
+    if request.form.get("docs_consent_version") != DOCS_CONSENT_VERSION:
+        raise VerificationError("Debes aceptar el texto sobre el tratamiento de tus documentos.")
     tier = request.form.get("tier", "")
     if tier not in _VERIF_REQUIRED:
         raise VerificationError("Elige el nivel: adulto o adulto estudiante.")
@@ -1880,7 +1892,7 @@ def corporal_verification_submit():
         images[kind] = f.read(MAX_IMAGE_BYTES + 1)
     if set(request.files) - set(_VERIF_REQUIRED[tier]):
         raise VerificationError("Hay archivos que no corresponden a ese nivel.")
-    store.submit(aid, tier, birth, images)
+    store.submit(aid, tier, birth, images, docs_consent_version=DOCS_CONSENT_VERSION)
     logger.info(f"[{aid[:8]}] Verificación de Corporal enviada ({tier})")
     resp = jsonify(_verification_state(aid, store))
     resp.headers["Cache-Control"] = "no-store"
