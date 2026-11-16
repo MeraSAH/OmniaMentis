@@ -50,6 +50,7 @@
 """
 
 import io
+from datetime import date
 import itertools
 import os
 import sys
@@ -1725,3 +1726,227 @@ class TestCorporalVerification:
         r = c.delete("/api/account", json={"password": "ClaveSegura#2026"})
         assert r.status_code == 200, r.get_json()
         assert os.listdir(tmp / "vf") == [] and store.list_pending() == []
+
+
+# ---------------------------------------------------------------------------
+# Comandos «/», medida íntima y fotos de progreso (2026-11-16)
+# ---------------------------------------------------------------------------
+import struct as _struct
+import zlib as _zlib
+
+
+def _jpeg_exif():
+    seg = lambda m, p: bytes([0xFF, m]) + _struct.pack(">H", len(p) + 2) + p
+    return (b"\xff\xd8" + seg(0xE1, b"Exif\x00\x00GPS-SECRETO") + seg(0xDB, b"\x00" + bytes(64)) +
+            seg(0xDA, b"\x01\x01\x00\x00\x3f\x00") + b"\x12\x34" + b"\xff\xd9")
+
+
+class TestSlashAndSensitiveData:
+    @pytest.fixture
+    def env(self, flask_app, monkeypatch, tmp_path):
+        from core.verification.verification import VerificationStore
+        store = VerificationStore(str(tmp_path / "v.db"), str(tmp_path / "vf"))
+        old = flask_app._shared.get("verification")
+        flask_app._shared["verification"] = store
+        flask_app._account_rate.clear()
+        flask_app._rate_data.clear()
+        yield flask_app, store, tmp_path, monkeypatch
+        flask_app._shared["verification"] = old
+        flask_app._account_rate.clear()
+        flask_app._rate_data.clear()
+
+    def _dev(self, env, birth="1990-05-05"):
+        app, store, _, mp = env
+        c = _authed(app) if birth == "1990-05-05" else _authed_born(app, birth)
+        email = c.get("/api/account/me").get_json()["profile"]["email"]
+        mp.setenv("OMNIA_DEV_EMAILS", f"otro@x.com, {email.upper()}")
+        return c
+
+    def _verify(self, env, c, consent=("intimate_measure",)):
+        app, store, _, _ = env
+        aid = c.get("/api/account/me").get_json()["profile"]["user_id"]
+        vid = store.submit(aid, "adult", date(1990, 5, 5), {"id_doc": _JPG, "face": _PNG})
+        store.approve(vid, "t")
+        from core.verification.verification import CONSENT_TEXT_VERSION, PHOTOS_CONSENT_VERSION
+        for k in consent:
+            store.grant_consent(aid, k, CONSENT_TEXT_VERSION if k == "intimate_measure" else PHOTOS_CONSENT_VERSION)
+        return aid
+
+    def _say(self, env, c, text):
+        env[0]._rate_data.clear()
+        r = post_chat(c, text)
+        assert r.status_code == 200, r.get_json()
+        return r.get_json()
+
+    # ---- quién puede usar «/»
+    def test_me_reports_developer_flag(self, env):
+        app, _, _, mp = env
+        c = _authed(app)
+        assert c.get("/api/account/me").get_json()["developer"] is False
+        c = self._dev(env)
+        assert c.get("/api/account/me").get_json()["developer"] is True
+        assert _anon(app).get("/api/account/me").get_json().get("developer") is None
+
+    def test_non_developer_is_refused_and_nothing_runs(self, env):
+        app, store, _, mp = env
+        mp.delenv("OMNIA_DEV_EMAILS", raising=False)
+        c = _authed(app)
+        r = self._say(env, c, "/[Corporal Verified] hueso púbico 15.2")
+        assert "solo para el desarrollador" in r["response"] and r["slash"] is True and r["module"] is None
+        assert "solo para el desarrollador" in self._say(env, c, "/")["response"]
+
+    def test_list_and_bad_module(self, env):
+        c = self._dev(env)
+        r = self._say(env, c, "/")
+        assert "/[Corporal Verified]" in r["response"] and "/[NutriVida]" in r["response"]
+        r = self._say(env, c, "/[Nada] hola")
+        assert "No existe el módulo" in r["response"] and "/[NutriVida]" in r["response"]
+        assert "Escribe el mensaje" in self._say(env, c, "/[NutriVida]")["response"]
+
+    def test_forced_module_ignores_keyword_scoring(self, env):
+        c = self._dev(env)
+        r = self._say(env, c, "/[NutriVida] quiero saber mi IMC, peso 70 kg y mido 175 cm")
+        assert r["module"] == "NutriVida" and "IMC" in r["response"].upper()
+
+    def test_case_insensitive_module_name(self, env):
+        c = self._dev(env)
+        r = self._say(env, c, "/[nutrivida] peso 70 kg, mido 175 cm")
+        assert r["module"] == "NutriVida"
+
+    def test_slash_is_not_saved_in_history_or_echo(self, env):
+        c = self._dev(env)
+        r = self._say(env, c, "/[NutriVida] peso 70 kg, mido 175 cm")
+        assert r["echo_saved"] is False and r.get("data") is None
+
+    # ---- gates (los mismos que el chat normal)
+    def test_minor_developer_still_age_restricted(self, env):
+        c = self._dev(env, birth="2010-01-01")
+        r = self._say(env, c, "/[Corporal Verified] hueso púbico 15.2")
+        assert r["age_restricted"] is True
+
+    def test_unverified_developer_is_blocked(self, env):
+        c = self._dev(env)
+        r = self._say(env, c, "/[Corporal Verified] hueso púbico 15.2")
+        assert r["auth_required"] is True and r["module"] == "Corporal Verified"
+
+    # ---- medida íntima por «/»
+    def test_intimate_needs_consent_then_saves(self, env):
+        app, store, _, _ = env
+        c = self._dev(env)
+        aid = self._verify(env, c, consent=())
+        r = self._say(env, c, "/[Corporal Verified] hueso púbico 15.2")
+        assert "consentimiento" in r["response"] and app._shared["ecosystem"].counts(aid).get("Corporal Verified", 0) == 0
+        from core.verification.verification import CONSENT_TEXT_VERSION
+        store.grant_consent(aid, "intimate_measure", CONSENT_TEXT_VERSION)
+        r = self._say(env, c, "/[Corporal Verified] hueso púbico 15,2 cm")
+        assert "Registrado" in r["response"] and "15.2" in r["response"]
+        recs = c.get("/api/account/modules/Corporal%20Verified/records?kind=medida_intima").get_json()
+        rows = recs.get("records") or recs.get("items") or []
+        assert len(rows) == 1 and rows[0]["payload"] == {"origen": "hueso_pubico", "tipo": "longitud", "cm": 15.2}
+
+    def test_intimate_validation_messages(self, env):
+        c = self._dev(env)
+        self._verify(env, c)
+        assert "creíble" in self._say(env, c, "/[Corporal Verified] base 99")["response"]
+        r = self._say(env, c, "/[Corporal Verified] hueso púbico")
+        assert "cuántos cm" in r["response"]
+        r = self._say(env, c, "/[Corporal Verified] base 2.5")
+        assert "No guardé nada" in r["response"]
+
+    def test_intimate_via_normal_chat_needs_clear_words(self, env):
+        c = self._dev(env)
+        self._verify(env, c)
+        r = self._say(env, c, "quiero registrar mi medida íntima: hueso púbico 15.2")
+        assert r["module"] == "Corporal Verified" and "Registrado" in r["response"]
+        r = self._say(env, c, "¿Cómo mido mi porcentaje de grasa corporal?")
+        assert r["module"] == "Corporal Verified" and "Registrado" not in r["response"]
+
+    # ---- API de la medida íntima
+    def test_intimate_api(self, env):
+        app, store, _, _ = env
+        c = _authed(app)
+        assert c.post("/api/corporal/intimate-measure", json={"origin": "base", "cm": 14}).status_code == 403
+        self._verify(env, c)
+        post = lambda body: c.post("/api/corporal/intimate-measure", json=body)
+        r = post({"origin": "perimetro", "cm": 12.34})
+        assert r.status_code == 201 and r.get_json()["cm"] == 12.3
+        for bad in ({"origin": "x", "cm": 12}, {"origin": "base", "cm": "no"}, {"origin": "base", "cm": 99}, {}):
+            assert post(bad).status_code == 400
+        assert c.post("/api/corporal/intimate-measure", data="no json", content_type="text/plain").status_code == 400
+        assert _anon(app).post("/api/corporal/intimate-measure", json={}).status_code == 401
+        minor = _authed_born(app, "2010-01-01")
+        assert minor.post("/api/corporal/intimate-measure", json={"origin": "base", "cm": 14}).status_code == 403
+
+    # ---- fotos de progreso
+    def _photo(self, c, data=None, note="semana 1"):
+        return c.post("/api/corporal/progress-photos", content_type="multipart/form-data",
+                      data={"photo": (io.BytesIO(data if data is not None else _jpeg_exif()), "a.jpg"), "note": note})
+
+    def test_photos_flow_private_and_stripped(self, env):
+        app, store, tmp, _ = env
+        c = _authed(app)
+        self._verify(env, c, consent=())
+        assert self._photo(c).status_code == 400                       # sin consentimiento
+        v = c.get("/api/corporal/verification").get_json()
+        assert v["progress_photos_consent"] is False and "solo tú" in v["photos_consent_text"]
+        assert c.post("/api/corporal/consent", json={"version": "vieja", "kind": "progress_photos"}).status_code == 400
+        r = c.post("/api/corporal/consent", json={"version": v["photos_consent_version"], "kind": "progress_photos"})
+        assert r.get_json()["progress_photos_consent"] is True and r.get_json()["intimate_measure_consent"] is False
+        r = self._photo(c)
+        assert r.status_code == 201
+        pid = r.get_json()["id"]
+        lst = c.get("/api/corporal/progress-photos").get_json()
+        assert lst["consent"] is True and [(p["id"], p["note"]) for p in lst["photos"]] == [(pid, "semana 1")]
+        img = c.get(f"/api/corporal/progress-photos/{pid}")
+        assert img.status_code == 200 and img.mimetype == "image/jpeg" and b"GPS" not in img.data
+        assert img.headers["X-Content-Type-Options"] == "nosniff" and "no-store" in img.headers["Cache-Control"]
+        # otra cuenta (también verificada y con consentimiento) no la ve ni la borra
+        other = _authed(app)
+        self._verify(env, other, consent=("progress_photos",))
+        assert other.get(f"/api/corporal/progress-photos/{pid}").status_code == 404
+        assert other.delete(f"/api/corporal/progress-photos/{pid}").status_code == 404
+        assert other.get("/api/corporal/progress-photos").get_json()["photos"] == []
+        assert c.delete(f"/api/corporal/progress-photos/{pid}").status_code == 200
+        assert c.get(f"/api/corporal/progress-photos/{pid}").status_code == 404
+
+    def test_photos_not_visible_to_the_fons(self, env):
+        app, store, _, _ = env
+        c = _authed(app)
+        self._verify(env, c, consent=("progress_photos",))
+        assert self._photo(c).status_code == 201
+        pid = store.list_photos(c.get("/api/account/me").get_json()["profile"]["user_id"])[0]["id"]
+        for kind in ("id_doc", "face", "student_doc", "photo"):
+            assert app.app.test_client().get(f"/api/fons/verifications/{pid}/image/{kind}").status_code == 401
+
+    def test_photo_validation_and_access(self, env):
+        app, store, tmp, _ = env
+        c = _authed(app)
+        assert self._photo(c).status_code == 400                       # sin verificar ni consentimiento
+        self._verify(env, c, consent=("progress_photos",))
+        assert self._photo(c, data=b"GIF89a....").status_code == 400
+        assert self._photo(c, data=b"\xff\xd8\xff" + b"0" * (6 * 1024 * 1024)).status_code == 413
+        assert c.post("/api/corporal/progress-photos", content_type="multipart/form-data", data={}).status_code == 400
+        assert _anon(app).get("/api/corporal/progress-photos").status_code == 401
+        minor = _authed_born(app, "2010-01-01")
+        assert minor.get("/api/corporal/progress-photos").status_code == 403
+
+    def test_revoking_photos_consent_hides_them(self, env):
+        app, store, _, _ = env
+        c = _authed(app)
+        self._verify(env, c, consent=("progress_photos",))
+        pid = self._photo(c).get_json()["id"]
+        r = c.delete("/api/corporal/consent?kind=progress_photos")
+        assert r.get_json()["progress_photos_consent"] is False
+        assert c.get("/api/corporal/progress-photos").get_json() == {"photos": [], "consent": False}
+        assert c.get(f"/api/corporal/progress-photos/{pid}").status_code == 404
+        assert c.delete("/api/corporal/consent?kind=otra").status_code == 400
+
+    def test_account_delete_removes_photos(self, env):
+        app, store, tmp, _ = env
+        c = _authed(app)
+        self._verify(env, c, consent=("progress_photos",))
+        self._photo(c)
+        assert os.listdir(store._photos_dir)
+        app._account_rate.clear()
+        assert c.delete("/api/account", json={"password": "ClaveSegura#2026"}).status_code == 200
+        assert os.listdir(store._photos_dir) == []

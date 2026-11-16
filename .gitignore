@@ -355,5 +355,6 @@ data/users/
 
 # Verificación de adultos (Corporal): NUNCA subir cédulas ni fotos al repositorio
 data/verification_files/
+data/progress_photos/
 data/verification.db*
 data/fons_audit.jsonl*

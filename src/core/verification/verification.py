@@ -13,6 +13,9 @@
 *     Lo único que se conserva: estado, nivel, fecha de verificación y la fecha en que el nivel estudiante
 *     vence (25.º cumpleaños). NO se conserva la fecha de nacimiento.
 *   - Medida sensible (peneana): solo adultos verificados y con consentimiento explícito registrado.
+*   - Fotos de progreso (2026-11-16): solo adultos verificados con consentimiento propio; privadas (solo las ve su
+*     dueña/o, nunca el panel del Fons); JPG/PNG sin metadatos (se quita EXIF/GPS); máximo 24; se borran una a una
+*     o con la cuenta.
 *   - Fail-closed: cualquier duda → sin acceso.
 """
 
@@ -32,8 +35,12 @@ MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_REJECTIONS = 3                      # en REJECT_WINDOW; después hay que esperar
 REJECT_WINDOW = timedelta(days=30)
 REQUIRED = {"adult": ("id_doc", "face"), "adult_student": ("id_doc", "face", "student_doc")}
-CONSENT_KINDS = ("intimate_measure",)
-CONSENT_TEXT_VERSION = "2026-11-15"
+CONSENT_KINDS = ("intimate_measure", "progress_photos")
+CONSENT_TEXT_VERSION = "2026-11-15"        # medida íntima
+PHOTOS_CONSENT_VERSION = "2026-11-16"      # fotos de progreso
+_CONSENT_VERSIONS = {"intimate_measure": CONSENT_TEXT_VERSION, "progress_photos": PHOTOS_CONSENT_VERSION}
+MAX_PHOTOS = 24
+PHOTO_NOTE_MAX = 100
 DOCS_CONSENT_VERSION = "2026-11-16"     # texto de tratamiento de documentos de verificación (privacidad.html, anexo Corporal)
 
 
@@ -77,12 +84,91 @@ def sniff_image(data: bytes) -> Optional[str]:
     return None
 
 
+def _strip_jpeg(data: bytes) -> bytes:
+    """Quita EXIF/XMP (APP1), APP13 y comentarios (COM) de un JPEG; el resto queda idéntico."""
+    if data[:2] != b"\xff\xd8":
+        raise VerificationError("JPG inválido.")
+    out = bytearray(b"\xff\xd8")
+    i, n = 2, len(data)
+    while i < n:
+        if data[i] != 0xFF:
+            raise VerificationError("JPG dañado.")
+        while i < n and data[i] == 0xFF:       # relleno 0xFF
+            i += 1
+        if i >= n:
+            raise VerificationError("JPG dañado.")
+        marker = data[i]
+        i += 1
+        if marker == 0xD9:                     # EOI
+            out += b"\xff\xd9"
+            return bytes(out)
+        if marker == 0x01 or 0xD0 <= marker <= 0xD7:      # marcadores sin longitud
+            out += bytes([0xFF, marker])
+            continue
+        if i + 2 > n:
+            raise VerificationError("JPG dañado.")
+        length = (data[i] << 8) | data[i + 1]
+        if length < 2 or i + length > n:
+            raise VerificationError("JPG dañado.")
+        seg = data[i:i + length]
+        if marker == 0xDA:                      # SOS: desde aquí es la imagen comprimida; se copia tal cual
+            rest = data[i + length:]
+            end = rest.rfind(b"\xff\xd9")        # sin EOI = dañado; lo que haya después del EOI (cola) se descarta
+            if end < 0:
+                raise VerificationError("JPG dañado.")
+            out += bytes([0xFF, marker]) + seg + rest[:end + 2]
+            return bytes(out)
+        if marker not in (0xE1, 0xED, 0xFE):
+            out += bytes([0xFF, marker]) + seg
+        i += length
+    raise VerificationError("JPG dañado.")
+
+
+_PNG_DROP = {b"eXIf", b"tEXt", b"zTXt", b"iTXt", b"tIME"}
+
+
+def _strip_png(data: bytes) -> bytes:
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise VerificationError("PNG inválido.")
+    out = bytearray(data[:8])
+    i, n = 8, len(data)
+    seen_end = False
+    while i < n:
+        if i + 12 > n:
+            raise VerificationError("PNG dañado.")
+        length = int.from_bytes(data[i:i + 4], "big")
+        if i + 12 + length > n:
+            raise VerificationError("PNG dañado.")
+        ctype = data[i + 4:i + 8]
+        if ctype not in _PNG_DROP:
+            out += data[i:i + 12 + length]
+        i += 12 + length
+        if ctype == b"IEND":
+            seen_end = True
+            break
+    if not seen_end:
+        raise VerificationError("PNG dañado.")
+    return bytes(out)
+
+
+def strip_image_metadata(data: bytes) -> Tuple[bytes, str]:
+    """(imagen sin metadatos, extensión). Fotos de progreso: solo JPG y PNG."""
+    kind = sniff_image(data)
+    if kind == "jpg":
+        return _strip_jpeg(data), "jpg"
+    if kind == "png":
+        return _strip_png(data), "png"
+    raise VerificationError("Para las fotos de progreso se aceptan solo JPG o PNG.")
+
+
 class VerificationStore:
-    def __init__(self, db_path: str, files_dir: str):
+    def __init__(self, db_path: str, files_dir: str, photos_dir: Optional[str] = None):
         self._db_path = db_path
         self._dir = files_dir
+        self._photos_dir = photos_dir or os.path.join(os.path.dirname(os.path.abspath(files_dir)), "progress_photos")
         self._lock = threading.Lock()
         os.makedirs(files_dir, mode=0o700, exist_ok=True)
+        os.makedirs(self._photos_dir, mode=0o700, exist_ok=True)
         d = os.path.dirname(os.path.abspath(db_path))
         os.makedirs(d, exist_ok=True)
         with self._conn() as c:
@@ -97,6 +183,9 @@ class VerificationStore:
             c.execute("""CREATE TABLE IF NOT EXISTS vimages(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, vid INTEGER NOT NULL, kind TEXT NOT NULL,
                 fname TEXT NOT NULL, ext TEXT NOT NULL)""")
+            c.execute("""CREATE TABLE IF NOT EXISTS photos(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, fname TEXT NOT NULL,
+                ext TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
             c.execute("""CREATE TABLE IF NOT EXISTS consents(
                 account_id TEXT NOT NULL, kind TEXT NOT NULL, text_version TEXT NOT NULL, granted_at TEXT NOT NULL,
                 PRIMARY KEY(account_id, kind))""")
@@ -250,6 +339,13 @@ class VerificationStore:
                 c.execute("DELETE FROM vimages WHERE vid=?", (v["id"],))
             c.execute("DELETE FROM verifications WHERE account_id=?", (account_id,))
             c.execute("DELETE FROM consents WHERE account_id=?", (account_id,))
+            for ph in c.execute("SELECT fname FROM photos WHERE account_id=?", (account_id,)).fetchall():
+                try:
+                    os.remove(os.path.join(self._photos_dir, ph["fname"]))
+                    removed += 1
+                except FileNotFoundError:
+                    pass
+            c.execute("DELETE FROM photos WHERE account_id=?", (account_id,))
         return removed
 
     # ------------------------------------------------------------------ acceso
@@ -281,7 +377,7 @@ class VerificationStore:
                       now: Optional[datetime] = None) -> None:
         if kind not in CONSENT_KINDS:
             raise VerificationError("Consentimiento desconocido.")
-        if accepted_text_version != CONSENT_TEXT_VERSION:
+        if accepted_text_version != _CONSENT_VERSIONS[kind]:
             raise VerificationError("Debes aceptar la versión vigente del texto.")
         if self.access_level(account_id, now) == "none":
             raise VerificationError("Primero debes verificarte como adulto.")
@@ -293,10 +389,69 @@ class VerificationStore:
         with self._lock, self._conn() as c:
             c.execute("DELETE FROM consents WHERE account_id=? AND kind=?", (account_id, kind))
 
-    def can_use_intimate_measure(self, account_id: str, now: Optional[datetime] = None) -> bool:
-        if self.access_level(account_id, now) == "none":
+    def has_consent(self, account_id: str, kind: str, now: Optional[datetime] = None) -> bool:
+        """Verificación vigente + consentimiento de ese tipo con la versión actual del texto. Fail-closed."""
+        if kind not in CONSENT_KINDS or self.access_level(account_id, now) == "none":
             return False
         with self._conn() as c:
-            row = c.execute("SELECT text_version FROM consents WHERE account_id=? AND kind='intimate_measure'",
-                            (account_id,)).fetchone()
-        return bool(row and row["text_version"] == CONSENT_TEXT_VERSION)
+            row = c.execute("SELECT text_version FROM consents WHERE account_id=? AND kind=?",
+                            (account_id, kind)).fetchone()
+        return bool(row and row["text_version"] == _CONSENT_VERSIONS[kind])
+
+    def can_use_intimate_measure(self, account_id: str, now: Optional[datetime] = None) -> bool:
+        return self.has_consent(account_id, "intimate_measure", now)
+
+    # ------------------------------------------------------------------ fotos de progreso (privadas)
+    def add_photo(self, account_id: str, data: bytes, note: str = "", now: Optional[datetime] = None) -> int:
+        if not self.has_consent(account_id, "progress_photos", now):
+            raise VerificationError("Primero acepta el consentimiento de las fotos de progreso.")
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            raise VerificationError("Imagen vacía o inválida.")
+        if len(data) > MAX_IMAGE_BYTES:
+            raise VerificationError("La imagen debe pesar 5 MB o menos.")
+        clean, ext = strip_image_metadata(bytes(data))
+        note = " ".join(str(note or "").split())[:PHOTO_NOTE_MAX]
+        with self._lock, self._conn() as c:
+            n = c.execute("SELECT COUNT(*) FROM photos WHERE account_id=?", (account_id,)).fetchone()[0]
+            if n >= MAX_PHOTOS:
+                raise VerificationError(f"Máximo {MAX_PHOTOS} fotos. Borra alguna para agregar otra.")
+            fname = secrets.token_hex(16) + "." + ext
+            path = os.path.join(self._photos_dir, fname)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(clean)
+            try:
+                cur = c.execute("INSERT INTO photos(account_id,fname,ext,note,created_at) VALUES(?,?,?,?,?)",
+                                (account_id, fname, ext, note, _iso(_utc(now))))
+            except Exception:
+                os.remove(path)
+                raise
+        return cur.lastrowid
+
+    def list_photos(self, account_id: str) -> List[Dict]:
+        with self._conn() as c:
+            rows = c.execute("SELECT id,note,created_at,ext FROM photos WHERE account_id=? ORDER BY id",
+                             (account_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def read_photo(self, account_id: str, photo_id: int) -> Tuple[bytes, str]:
+        """Solo su dueña/o: el id de otra cuenta se trata como inexistente."""
+        with self._conn() as c:
+            row = c.execute("SELECT fname,ext FROM photos WHERE id=? AND account_id=?",
+                            (photo_id, account_id)).fetchone()
+        if not row:
+            raise VerificationError("Foto no encontrada.")
+        with open(os.path.join(self._photos_dir, row["fname"]), "rb") as f:
+            return f.read(), row["ext"]
+
+    def delete_photo(self, account_id: str, photo_id: int) -> bool:
+        with self._lock, self._conn() as c:
+            row = c.execute("SELECT fname FROM photos WHERE id=? AND account_id=?", (photo_id, account_id)).fetchone()
+            if not row:
+                return False
+            try:
+                os.remove(os.path.join(self._photos_dir, row["fname"]))
+            except FileNotFoundError:
+                pass
+            c.execute("DELETE FROM photos WHERE id=?", (photo_id,))
+        return True

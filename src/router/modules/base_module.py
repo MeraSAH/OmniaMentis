@@ -63,3 +63,6 @@ class OmniaContext:
     # Almacen unico de datos de modulos (EcosystemStore) o None. Lo entrega el
     # motor; el modulo no abre bases propias. Sin almacen, calcula pero no guarda.
     data_store: Optional[Any] = None
+    # Verificador de adultos (core/verification) o None. Lo entrega el motor; el módulo solo pregunta
+    # (p. ej. si hay consentimiento para una medida sensible). None = sin permiso.
+    verification: Optional[Any] = None

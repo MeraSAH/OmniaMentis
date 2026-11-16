@@ -219,6 +219,23 @@ class KeywordRouter:
             scores=scores,
         )
 
+    def route_to(self, module_name: str, message: str, context: OmniaContext) -> RoutingResult:
+        """Entrega el mensaje a un módulo CONCRETO (comando «/» del desarrollador). Salta solo la puntuación
+        por palabras clave; el gate de edad y el de autorización elevada se aplican igual que en route()."""
+        target = next((m for m in self.modules if m.name == module_name), None)
+        if target is None:
+            return RoutingResult(should_route=False, module_response=None, scores={})
+        if not module_allowed(target.name, context.age_band, self.policy):
+            return RoutingResult(should_route=False, module_response=None, scores={},
+                                 age_restricted_module=target.name)
+        if target.requires_elevated_auth:
+            authorized = bool(self.auth_checker) and self.auth_checker(context)
+            if not authorized:
+                return RoutingResult(should_route=False, module_response=None, scores={target.name: 1.0},
+                                     auth_required_but_missing=True)
+        return RoutingResult(should_route=True, module_response=target.handle(message, context),
+                             scores={target.name: 1.0})
+
     def list_modules(self) -> List[str]:
         """Devuelve los nombres de todos los módulos registrados."""
         return [m.name for m in self.modules]

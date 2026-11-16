@@ -8,7 +8,11 @@
 *            modulo orienta y NO duplica formulas.
 """
 
+import logging
 from typing import List
+
+from core.health import intimate
+from core.health.nutrition import InvalidMeasure
 from .base_module import OmniaModule, OmniaContext, ModuleResponse
 
 
@@ -28,10 +32,13 @@ class CorporalVerifiedModule(OmniaModule):
             "composición corporal", "cintura", "circunferencia",
             "imc", "indice de masa", "índice de masa", "progreso fisico",
             "progreso físico", "foto de progreso", "antes y despues",
-            "antes y después",
+            "antes y después", "medida intima", "medida íntima", "miembro viril",
+            "longitud peneana", "hueso pubico", "hueso púbico",
         ]
 
     def handle(self, message: str, context: OmniaContext) -> ModuleResponse:
+        if intimate.looks_intimate(message):
+            return self._intimate(message, context)
         return ModuleResponse(
             text=(
                 "📏 Corporal verificado: ya puedes usarlo.\n\n"
@@ -45,3 +52,41 @@ class CorporalVerifiedModule(OmniaModule):
             module_name=self.name,
             data={"status": "verified", "domain": "body_composition"},
         )
+
+    # ------------------------------------------------------------------ medida íntima (opcional)
+    def _intimate(self, message: str, context: OmniaContext) -> ModuleResponse:
+        """Registra la medida solo si hay consentimiento vigente. El módulo no decide nada: pregunta al verificador."""
+        v = context.verification
+        try:
+            allowed = bool(v is not None and v.can_use_intimate_measure(context.user_id))
+        except Exception:
+            allowed = False
+        if not allowed:
+            return ModuleResponse(
+                text=("Esa medida es opcional y necesita tu consentimiento expreso. Actívalo en Corporal, sección "
+                      "«Medida sensible». No guardé nada."),
+                module_name=self.name, data={"status": "consent_required"})
+        origin, cm = intimate.parse_message(message)
+        if origin is None or cm is None:
+            return ModuleResponse(
+                text=("Dime de dónde mides y cuántos cm: «hueso púbico 15.2», «base 14.5» o «perímetro 12». "
+                      "No guardé nada."),
+                module_name=self.name, data={"status": "need_more"})
+        try:
+            payload = intimate.build_payload(origin, cm)
+        except InvalidMeasure as e:
+            return ModuleResponse(text=f"{e} No guardé nada.", module_name=self.name,
+                                  data={"status": "invalid"})
+        saved = False
+        if context.data_store is not None:
+            try:
+                context.data_store.add(context.user_id, self.name, "medida_intima", dict(payload))
+                saved = True
+            except Exception as e:
+                logging.getLogger(__name__).warning("Corporal: no se pudo guardar la medida: %s", type(e).__name__)
+        label = intimate.ORIGINS[origin]["label"]
+        text = f"✅ Registrado: {label} = {payload['cm']} cm." if saved else (
+            f"{label}: {payload['cm']} cm. No pude guardarlo ahora mismo.")
+        return ModuleResponse(
+            text=text + " Es solo un dato tuyo: no se compara ni se califica, y no afecta tu sexualidad.",
+            module_name=self.name, data={"status": "saved" if saved else "not_saved", **payload})

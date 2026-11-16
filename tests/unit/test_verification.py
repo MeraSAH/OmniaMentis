@@ -277,3 +277,119 @@ class TestSchemaMigrationAndConsentRecord:
         vs.submit("a", "adult", date(1990, 1, 1), ADULT_IMGS, T0, docs_consent_version="2026-11-16")
         assert sqlite3.connect(db).execute("SELECT docs_consent FROM verifications").fetchone()[0] == "2026-11-16"
         VerificationStore(db, str(tmp_path / "f"))        # abrir de nuevo no falla
+
+
+# ---------------------------------------------------------------------------
+# Fotos de progreso: privadas, sin metadatos, con consentimiento propio
+# ---------------------------------------------------------------------------
+import struct
+import zlib
+
+from core.verification.verification import (MAX_PHOTOS, PHOTOS_CONSENT_VERSION, strip_image_metadata)
+
+
+def _seg(marker, payload):
+    return bytes([0xFF, marker]) + struct.pack(">H", len(payload) + 2) + payload
+
+
+def real_jpeg(with_meta=True):
+    meta = _seg(0xE1, b"Exif\x00\x00GPS-LAT-0.123") + _seg(0xFE, b"comentario secreto") if with_meta else b""
+    return b"\xff\xd8" + _seg(0xE0, b"JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00") + meta + \
+        _seg(0xDB, b"\x00" + bytes(64)) + _seg(0xDA, b"\x01\x01\x00\x00\x3f\x00") + b"\x12\x34\xff\x00\x56" + b"\xff\xd9"
+
+
+def _chunk(t, d):
+    return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+
+
+def real_png(with_meta=True):
+    meta = _chunk(b"tEXt", b"GPS\x00-0.123") + _chunk(b"eXIf", b"EXIFDATA") + _chunk(b"tIME", bytes(7)) if with_meta else b""
+    ihdr = _chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+    return b"\x89PNG\r\n\x1a\n" + ihdr + meta + _chunk(b"IDAT", zlib.compress(b"\x00\x01\x02\x03")) + _chunk(b"IEND", b"")
+
+
+class TestStripMetadata:
+    def test_jpeg_loses_exif_and_comments_but_keeps_image(self):
+        out, ext = strip_image_metadata(real_jpeg())
+        assert ext == "jpg" and b"GPS" not in out and b"secreto" not in out and b"Exif" not in out
+        assert out == real_jpeg(with_meta=False)               # el resto queda byte a byte idéntico
+
+    def test_jpeg_trailing_data_after_eoi_is_dropped(self):
+        out, _ = strip_image_metadata(real_jpeg() + b"DATOS-ESCONDIDOS")
+        assert b"ESCONDIDOS" not in out and out.endswith(b"\xff\xd9")
+
+    def test_png_loses_text_chunks(self):
+        out, ext = strip_image_metadata(real_png())
+        assert ext == "png" and b"GPS" not in out and b"EXIFDATA" not in out
+        assert out == real_png(with_meta=False)
+
+    @pytest.mark.parametrize("bad", [b"", WEBP, b"GIF89a....", b"\xff\xd8\xff", b"\xff\xd8\xff\xe1\xff\xff",
+                                     real_jpeg()[:-3], real_png()[:-12], b"\x89PNG\r\n\x1a\n" + b"\x00" * 5])
+    def test_rejects_unknown_or_broken(self, bad):
+        with pytest.raises(VerificationError):
+            strip_image_metadata(bad)
+
+
+class TestProgressPhotos:
+    @pytest.fixture
+    def ok(self, vs):
+        vid = vs.submit("a", "adult", date(1990, 1, 1), ADULT_IMGS, T0)
+        vs.approve(vid, "s", T0)
+        vs.grant_consent("a", "progress_photos", PHOTOS_CONSENT_VERSION, T0)
+        return vs
+
+    def test_needs_verification_and_consent(self, vs):
+        with pytest.raises(VerificationError):
+            vs.add_photo("a", real_jpeg(), "", T0)
+        vid = vs.submit("a", "adult", date(1990, 1, 1), ADULT_IMGS, T0)
+        vs.approve(vid, "s", T0)
+        with pytest.raises(VerificationError, match="consentimiento"):
+            vs.add_photo("a", real_jpeg(), "", T0)
+        with pytest.raises(VerificationError):
+            vs.grant_consent("a", "progress_photos", "vieja", T0)
+
+    def test_add_list_read_delete(self, ok):
+        pid = ok.add_photo("a", real_jpeg(), "  semana\n 1  ", T0)
+        assert [(p["id"], p["note"]) for p in ok.list_photos("a")] == [(pid, "semana 1")]
+        data, ext = ok.read_photo("a", pid)
+        assert ext == "jpg" and data == real_jpeg(with_meta=False)
+        assert ok.delete_photo("a", pid) is True and ok.list_photos("a") == []
+        assert os.listdir(ok._photos_dir) == [] and ok.delete_photo("a", pid) is False
+
+    def test_only_the_owner_can_read_or_delete(self, ok):
+        pid = ok.add_photo("a", real_png(), "", T0)
+        with pytest.raises(VerificationError):
+            ok.read_photo("b", pid)
+        assert ok.delete_photo("b", pid) is False and len(ok.list_photos("a")) == 1
+
+    def test_limits(self, ok):
+        with pytest.raises(VerificationError, match="5 MB"):
+            ok.add_photo("a", real_jpeg()[:-2] + b"0" * MAX_IMAGE_BYTES + b"\xff\xd9", "", T0)
+        with pytest.raises(VerificationError):
+            ok.add_photo("a", WEBP, "", T0)
+        for _ in range(MAX_PHOTOS):
+            ok.add_photo("a", real_jpeg(), "", T0)
+        with pytest.raises(VerificationError, match="Máximo"):
+            ok.add_photo("a", real_jpeg(), "", T0)
+        assert len(os.listdir(ok._photos_dir)) == MAX_PHOTOS
+
+    def test_note_is_truncated(self, ok):
+        ok.add_photo("a", real_jpeg(), "x" * 500, T0)
+        assert len(ok.list_photos("a")[0]["note"]) == 100
+
+    def test_revoking_consent_blocks_new_photos(self, ok):
+        ok.revoke_consent("a", "progress_photos")
+        with pytest.raises(VerificationError):
+            ok.add_photo("a", real_jpeg(), "", T0)
+
+    def test_private_permissions_and_delete_account(self, ok):
+        ok.add_photo("a", real_jpeg(), "", T0)
+        for f in os.listdir(ok._photos_dir):
+            assert oct(os.stat(os.path.join(ok._photos_dir, f)).st_mode & 0o777) == "0o600"
+        ok.delete_account_data("a")
+        assert os.listdir(ok._photos_dir) == [] and ok.list_photos("a") == []
+
+    def test_has_consent_is_per_kind(self, ok):
+        assert ok.has_consent("a", "progress_photos", T0) is True
+        assert ok.has_consent("a", "intimate_measure", T0) is False
+        assert ok.has_consent("a", "otra", T0) is False and ok.has_consent("zz", "progress_photos", T0) is False

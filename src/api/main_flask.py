@@ -245,9 +245,13 @@ from core.storage.ecosystem_store import EcosystemStore, StoreError
 from core.forge import code_review as forge_cr
 from living_memory.gestation_diary import GestationDiary
 from analytics.research_analytics import ResearchAnalytics
-from router.integration import route_or_none, get_registered_modules, set_auth_checker
+from router.integration import route_or_none, route_forced, get_registered_modules, set_auth_checker
+from router import slash as slash_cmd
 from core.verification.verification import (VerificationStore, VerificationError, CONSENT_TEXT_VERSION,
-                                            MAX_IMAGE_BYTES, DOCS_CONSENT_VERSION, REQUIRED as _VERIF_REQUIRED)
+                                            MAX_IMAGE_BYTES, DOCS_CONSENT_VERSION, PHOTOS_CONSENT_VERSION,
+                                            MAX_PHOTOS, REQUIRED as _VERIF_REQUIRED)
+from core.health import intimate as _intimate
+from core.health.nutrition import InvalidMeasure as _InvalidMeasure
 from router.policy import MODULE_MIN_AGE_BAND, module_allowed
 
 # ==================== LOGGING ====================
@@ -513,6 +517,9 @@ ACCOUNT_RATE_LIMITS = {
     "verification_submit": (5, 3600),
     "verification_read": (60, 60),
     "consent": (10, 3600),
+    "intimate_save": (60, 3600),
+    "photo_upload": (30, 3600),
+    "photo_read": (120, 60),
 }
 _ACCOUNT_RATE_HORIZON = 3600.0
 _account_rate: Dict[str, list] = {}
@@ -1055,6 +1062,20 @@ def _get_phase(consciousness: float) -> int:
 PHASE_2_CONSCIOUSNESS_THRESHOLD = 0.15
 
 
+def _dev_emails() -> frozenset:
+    """Correos con permiso para los comandos «/» (OMNIA_DEV_EMAILS, separados por coma). Vacío = nadie."""
+    raw = os.environ.get("OMNIA_DEV_EMAILS", "")
+    return frozenset(e.strip().lower() for e in raw.split(",") if e.strip())
+
+
+def _is_developer(account_id) -> bool:
+    try:
+        profile = _accounts().get_profile(str(account_id)) if account_id else None
+        return bool(profile) and str(profile.get("email", "")).strip().lower() in _dev_emails()
+    except Exception:
+        return False
+
+
 def _corporal_auth_checker(context) -> bool:
     """Autorización elevada del router (Corporal): solo cuentas adultas verificadas. Fail-closed."""
     try:
@@ -1584,7 +1605,7 @@ def account_me():
     if profile is None:
         session.clear()
         return jsonify({"logged_in": False, "profile": None})
-    return jsonify({"logged_in": True, "profile": profile})
+    return jsonify({"logged_in": True, "profile": profile, "developer": _is_developer(aid)})
 
 
 @app.put("/api/account/profile")
@@ -1819,6 +1840,13 @@ DOCS_CONSENT_TEXT = (
 )
 
 
+PHOTOS_CONSENT_TEXT = (
+    "Las fotos de progreso son opcionales. Se guardan privadas en tu cuenta: solo tú puedes verlas; el panel de "
+    "revisión no las muestra. Quitamos los metadatos de la imagen (ubicación, fecha, dispositivo). Puedes borrar "
+    "cada foto cuando quieras y todas se borran si eliminas tu cuenta. Puedes retirar este consentimiento."
+)
+
+
 def _verification_context():
     """(account_id, store, None) o (None, None, respuesta de error). Exige cuenta adulta."""
     aid, err = _login_required()
@@ -1841,6 +1869,11 @@ def _verification_state(aid: str, store) -> Dict[str, Any]:
         "tier": st.get("tier"),
         "access": store.access_level(aid),
         "intimate_measure_consent": store.can_use_intimate_measure(aid),
+        "progress_photos_consent": store.has_consent(aid, "progress_photos"),
+        "photos_consent_text": PHOTOS_CONSENT_TEXT,
+        "photos_consent_version": PHOTOS_CONSENT_VERSION,
+        "max_photos": MAX_PHOTOS,
+        "intimate_origins": {k: v["label"] for k, v in _intimate.ORIGINS.items()},
         "consent_text": INTIMATE_CONSENT_TEXT,
         "consent_version": CONSENT_TEXT_VERSION,
         "docs_consent_version": DOCS_CONSENT_VERSION,
@@ -1911,7 +1944,10 @@ def corporal_consent_grant():
     body = request.get_json(silent=True)
     if not isinstance(body, dict) or not isinstance(body.get("version"), str):
         return jsonify({"error": "invalid_request", "message": 'Envía {"version": "..."}.'}), 400
-    store.grant_consent(aid, "intimate_measure", body["version"])
+    kind = body.get("kind", "intimate_measure")
+    if kind not in ("intimate_measure", "progress_photos"):
+        return jsonify({"error": "invalid_request", "message": "Consentimiento desconocido."}), 400
+    store.grant_consent(aid, kind, body["version"])
     return jsonify(_verification_state(aid, store))
 
 
@@ -1923,8 +1959,108 @@ def corporal_consent_revoke():
     limited = _rate_limited("consent")
     if limited:
         return limited
-    store.revoke_consent(aid, "intimate_measure")
+    kind = request.args.get("kind", "intimate_measure")
+    if kind not in ("intimate_measure", "progress_photos"):
+        return jsonify({"error": "invalid_request", "message": "Consentimiento desconocido."}), 400
+    store.revoke_consent(aid, kind)
     return jsonify(_verification_state(aid, store))
+
+
+@app.post("/api/corporal/intimate-measure")
+def corporal_intimate_save():
+    """Body: {"origin": "hueso_pubico|base|perimetro", "cm": 15.2}. Solo adultos verificados con consentimiento."""
+    aid, store, err = _verification_context()
+    if err:
+        return err
+    limited = _rate_limited("intimate_save")
+    if limited:
+        return limited
+    if not store.can_use_intimate_measure(aid):
+        return jsonify({"error": "consent_required",
+                        "message": "Activa primero el consentimiento de la medida sensible."}), 403
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "invalid_request", "message": "Cuerpo inválido."}), 400
+    try:
+        payload = _intimate.build_payload(body.get("origin"), body.get("cm"))
+    except _InvalidMeasure as e:
+        return jsonify({"error": "invalid_measure", "message": str(e)}), 400
+    eco = _shared.get("ecosystem")
+    if eco is None:
+        return jsonify({"error": "storage_unavailable", "message": "No se pudo guardar ahora mismo."}), 503
+    eco.add(aid, CORPORAL, "medida_intima", dict(payload))
+    return jsonify({"saved": True, **payload}), 201
+
+
+# --- Fotos de progreso: privadas, solo su dueña/o (el Fons NUNCA las ve) ---
+
+@app.get("/api/corporal/progress-photos")
+def corporal_photos_list():
+    aid, store, err = _verification_context()
+    if err:
+        return err
+    limited = _rate_limited("photo_read")
+    if limited:
+        return limited
+    if not store.has_consent(aid, "progress_photos"):
+        return jsonify({"photos": [], "consent": False})
+    resp = jsonify({"photos": [{"id": p["id"], "note": p["note"], "created_at": p["created_at"]}
+                               for p in store.list_photos(aid)], "consent": True})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.post("/api/corporal/progress-photos")
+def corporal_photos_add():
+    """multipart/form-data: photo (JPG o PNG, máx. 5 MB) y note (opcional, máx. 100)."""
+    aid, store, err = _verification_context()
+    if err:
+        return err
+    limited = _rate_limited("photo_upload")
+    if limited:
+        return limited
+    length = request.content_length
+    if length is None or length > MAX_IMAGE_BYTES + 256 * 1024:
+        return jsonify({"error": "payload_too_large", "message": "La imagen debe pesar 5 MB o menos."}), 413
+    f = request.files.get("photo")
+    if f is None:
+        raise VerificationError("Falta la foto.")
+    pid = store.add_photo(aid, f.read(MAX_IMAGE_BYTES + 1), request.form.get("note", ""))
+    return jsonify({"id": pid}), 201
+
+
+@app.get("/api/corporal/progress-photos/<int:photo_id>")
+def corporal_photo_get(photo_id: int):
+    aid, store, err = _verification_context()
+    if err:
+        return err
+    limited = _rate_limited("photo_read")
+    if limited:
+        return limited
+    if not store.has_consent(aid, "progress_photos"):
+        return jsonify({"error": "not_found"}), 404
+    try:
+        data, ext = store.read_photo(aid, photo_id)
+    except (VerificationError, OSError):
+        return jsonify({"error": "not_found"}), 404
+    resp = Response(data, mimetype=_IMAGE_MIME[ext])
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Content-Security-Policy"] = "default-src 'none'"
+    return resp
+
+
+@app.delete("/api/corporal/progress-photos/<int:photo_id>")
+def corporal_photo_delete(photo_id: int):
+    aid, store, err = _verification_context()
+    if err:
+        return err
+    limited = _rate_limited("photo_upload")
+    if limited:
+        return limited
+    if not store.delete_photo(aid, photo_id):
+        return jsonify({"error": "not_found"}), 404
+    return jsonify({"deleted": True})
 
 
 # --- Panel del Fons (solo local + sesión del Fons): cola de revisión ---
@@ -2345,6 +2481,42 @@ def get_chat_resolution(consultation_id: str):
 
 # ==================== CHAT PRINCIPAL ====================
 
+def _run_slash(user_message: str, user_id: str, sess: Dict[str, Any]) -> Dict[str, Any]:
+    """Resuelve un comando «/». Devuelve el mismo formato de respuesta que el chat."""
+    def reply(text: str, module=None, auth=False, age=False, data=None) -> Dict[str, Any]:
+        return {
+            "response": text,
+            "consciousness": sess["identity"].consciousness_level,
+            "phase": _get_phase(sess["identity"].consciousness_level),
+            "emotion": "neutral", "confidence": 0.0, "echo_saved": False,
+            "module": module, "auth_required": auth, "age_restricted": age,
+            "widget": None, "grief_subtype": None, "slash": True, "data": data,
+        }
+
+    if not _is_developer(user_id):
+        return reply("Los comandos «/» son solo para el desarrollador.")
+    cmd = slash_cmd.parse(user_message)
+    available = get_registered_modules()
+    if cmd is None or cmd.kind == "list":
+        return reply(slash_cmd.help_text(available))
+    name = slash_cmd.resolve_module(cmd.module, available)
+    if name is None:
+        return reply(f"No existe el módulo «{cmd.module}».\n\n" + slash_cmd.help_text(available))
+    if not cmd.text:
+        return reply(f"Escribe el mensaje después del módulo: /[{name}] mensaje", module=name)
+    out = route_forced(
+        name, cmd.text,
+        user_id=user_id,
+        consciousness_level=sess["identity"].consciousness_level,
+        session_id=user_id,
+        age_band=_current_age_band(),
+        data_store=_shared.get("ecosystem"),
+        verification=_shared.get("verification"),
+    )
+    logger.info(f"[{user_id[:8]}] Comando / → {name}")
+    return reply(out["response"], module=out["module"], auth=out["auth_required"],
+                 age=out["age_restricted"], data=None)
+
 @app.post("/api/chat")
 @account_required
 def chat_endpoint():
@@ -2418,6 +2590,11 @@ def chat_endpoint():
             "critical_risk": bool(crisis),
         })
 
+    # 1b. COMANDOS «/» (solo desarrollador): entregan el texto a un módulo concreto. Pasaron por la ética arriba;
+    #     van por los mismos gates de edad y autorización; NO entran en el historial, el eco ni el registro.
+    if slash_cmd.is_slash(user_message):
+        return jsonify(_run_slash(user_message, user_id, sess))
+
     # 2. ROUTER DE MÓDULOS — solo si ya pasó ética.
     routed = route_or_none(
         user_message,
@@ -2426,6 +2603,7 @@ def chat_endpoint():
         session_id=user_id,
         age_band=_current_age_band(),
         data_store=_shared.get("ecosystem"),
+        verification=_shared.get("verification"),
     )
 
     # 3. Detección de intención y emoción (por usuario).

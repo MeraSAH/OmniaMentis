@@ -1159,6 +1159,16 @@ body::before { display: none; }          /* sin líneas CRT: el cristal pide un 
 }
 .mod-btn:hover:not(:disabled), .mod-btn:focus-visible { border-color: var(--neon-blue); outline: none; box-shadow: 0 0 8px rgba(0,200,255,.4); }
 .mod-btn:disabled { opacity: .45; cursor: not-allowed; }
+.slash-menu { position: absolute; left: 18px; right: 18px; bottom: calc(100% - 4px); z-index: 40; max-height: 220px; overflow: auto;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px; background: var(--bg-deep, #0a1220); border: 1px solid var(--border-hot, #1e90ff);
+  border-radius: 8px; box-shadow: 0 -6px 24px rgba(0,0,0,.45); }
+.slash-menu[hidden] { display: none; }
+.slash-item { text-align: left; background: transparent; border: 1px solid transparent; color: var(--text, #e8f4ff); padding: 8px 10px; border-radius: 6px;
+  cursor: pointer; font: inherit; border-left: 3px solid var(--mc, #00c8ff); }
+.slash-item:hover, .slash-item:focus-visible { background: rgba(255,255,255,.08); outline: none; border-color: var(--mc, #00c8ff); }
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.photo-grid figure { margin: 0; display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
+.photo-grid img { width: 100%; aspect-ratio: 3/4; object-fit: cover; border-radius: 6px; border: 1px solid rgba(255,255,255,.2); cursor: zoom-in; background: rgba(255,255,255,.05); }
 .mod-btn.danger { color: var(--danger); border-color: var(--danger); }
 .mod-rec { padding: 8px 10px; border-left: 2px solid var(--neon-dim); background: var(--bg-card); font-size: 12px; color: var(--text-main); word-break: break-word; }
 .mod-rec time { color: var(--text-sub); display: block; font-size: 11px; }
@@ -2883,12 +2893,16 @@ async function corporalView(body, th) {
   corporalRender(box, res.data);
 }
 
+let CORP_URLS = [];
 function corporalRender(box, st) {
+  CORP_URLS.forEach(u => URL.revokeObjectURL(u)); CORP_URLS = [];
   while (box.firstChild) box.removeChild(box.firstChild);
   box.appendChild(modEl('div', 'mod-name', 'Estado: ' + (CORP_STATUS[st.status] || 'Sin verificar')));
   if (st.status === 'approved') {
     box.appendChild(modEl('p', 'mod-sub', 'Nivel: ' + (st.access === 'adult_student' ? 'Adulto estudiante' : 'Adulto') + '. Ya puedes usar Corporal desde el chat.'));
     corporalConsent(box, st);
+    if (st.intimate_measure_consent) corporalMeasures(box, st);
+    corporalPhotos(box, st);
     return;
   }
   if (st.status === 'pending') {
@@ -2961,6 +2975,111 @@ function corporalConsent(box, st) {
   box.appendChild(sec);
 }
 
+// ---- Medida sensible: de dónde se mide + cm. Solo con consentimiento; sin comparaciones ni calificaciones.
+async function corporalMeasures(box, st) {
+  const th = MOD_THEME['Corporal Verified'] || { c: '#f87171' };
+  const sec = modEl('div'); sec.style.cssText = 'display:flex;flex-direction:column;gap:8px;margin-top:10px';
+  sec.appendChild(modEl('div', 'mod-name', 'Registrar medida'));
+  sec.appendChild(modEl('p', 'mod-sub', 'Elige de dónde mides y escribe los centímetros. Es solo un dato tuyo: no se compara con nadie.'));
+  const form = modEl('form'); form.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;align-items:center';
+  const sel = modEl('select'); sel.setAttribute('aria-label', 'De dónde mides');
+  for (const k of Object.keys(st.intimate_origins || {})) { const o = modEl('option', '', st.intimate_origins[k]); o.value = k; sel.appendChild(o); }
+  const cm = modEl('input'); cm.type = 'number'; cm.step = '0.1'; cm.min = '3'; cm.max = '30'; cm.required = true; cm.placeholder = 'cm'; cm.setAttribute('aria-label', 'Centímetros'); cm.style.width = '90px';
+  const go = modEl('button', 'mod-btn', 'Guardar'); go.type = 'submit';
+  const msg = modEl('p', 'mod-sub'); msg.setAttribute('role', 'status');
+  form.append(sel, cm, go);
+  const hist = modEl('div'); hist.style.cssText = 'display:flex;flex-direction:column;gap:10px';
+  sec.append(form, msg, hist);
+  box.appendChild(sec);
+  async function load() {
+    const r = await modApi('/api/account/modules/' + encodeURIComponent('Corporal Verified') + '/records?kind=medida_intima&limit=200');
+    hist.textContent = '';
+    const recs = (r.ok && r.data && Array.isArray(r.data.records)) ? byKind(r.data.records, 'medida_intima') : [];
+    for (const k of Object.keys(st.intimate_origins || {})) {
+      const rows = recs.filter(x => x.payload.origen === k).slice(0, 12).reverse();
+      if (!rows.length) continue;
+      hist.appendChild(modEl('div', 'mod-sub', st.intimate_origins[k] + ' · última: ' + fmtN(rows[rows.length - 1].payload.cm, 1) + ' cm'));
+      mLine(hist, rows.map(x => ({ label: when(x.created_at), value: x.payload.cm })), th.c, null, 'Evolución: ' + st.intimate_origins[k]);
+    }
+  }
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    go.disabled = true; msg.textContent = 'Guardando…';
+    const r = await modApi('/api/corporal/intimate-measure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ origin: sel.value, cm: parseFloat(cm.value) }) });
+    go.disabled = false;
+    if (r.ok) { msg.textContent = 'Guardado.'; cm.value = ''; load(); return; }
+    msg.textContent = (r.data && r.data.message) || 'No se pudo guardar.';
+  });
+  load();
+}
+
+// ---- Fotos de progreso: privadas (solo tú las ves), sin metadatos, con consentimiento propio.
+async function corporalPhotos(box, st) {
+  const sec = modEl('div'); sec.style.cssText = 'display:flex;flex-direction:column;gap:8px;margin-top:14px';
+  sec.appendChild(modEl('div', 'mod-name', 'Fotos de progreso (opcional)'));
+  const msg = modEl('p', 'mod-sub'); msg.setAttribute('role', 'status');
+  box.appendChild(sec);
+  async function consent(grant) {
+    const r = grant
+      ? await modApi('/api/corporal/consent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'progress_photos', version: st.photos_consent_version }) })
+      : await modApi('/api/corporal/consent?kind=progress_photos', { method: 'DELETE' });
+    if (r.ok && r.data) { corporalRender(box, r.data); return; }
+    msg.textContent = (r.data && r.data.message) || 'No se pudo guardar.';
+  }
+  if (!st.progress_photos_consent) {
+    sec.appendChild(modEl('p', 'mod-sub', st.photos_consent_text || ''));
+    const b = modEl('button', 'mod-btn', 'Acepto, quiero guardar fotos de progreso'); b.type = 'button';
+    b.addEventListener('click', () => { b.disabled = true; consent(true); });
+    sec.append(b, msg);
+    return;
+  }
+  const form = modEl('form'); form.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;align-items:center';
+  const file = modEl('input'); file.type = 'file'; file.accept = 'image/jpeg,image/png'; file.required = true; file.setAttribute('aria-label', 'Foto (JPG o PNG, máx. 5 MB)');
+  const note = modEl('input'); note.type = 'text'; note.maxLength = 100; note.placeholder = 'Nota (opcional)'; note.setAttribute('aria-label', 'Nota');
+  const add = modEl('button', 'mod-btn', 'Agregar foto'); add.type = 'submit';
+  form.append(file, note, add);
+  const grid = modEl('div', 'photo-grid');
+  const off = modEl('button', 'mod-btn danger', 'Retirar mi consentimiento de fotos'); off.type = 'button';
+  off.addEventListener('click', () => { off.disabled = true; consent(false); });
+  sec.append(modEl('p', 'mod-sub', 'JPG o PNG, hasta 5 MB y ' + (st.max_photos || 24) + ' fotos. Quitamos la ubicación y demás metadatos.'), form, msg, grid, off);
+  async function load() {
+    const r = await modApi('/api/corporal/progress-photos');
+    grid.textContent = '';
+    CORP_URLS.forEach(u => URL.revokeObjectURL(u)); CORP_URLS = [];
+    const photos = (r.ok && r.data && Array.isArray(r.data.photos)) ? r.data.photos : [];
+    if (!photos.length) grid.appendChild(modEl('p', 'mod-sub', 'Todavía no hay fotos.'));
+    for (const ph of photos) {
+      const fig = modEl('figure');
+      const img = modEl('img'); img.alt = ph.note || 'Foto de progreso';
+      img.addEventListener('click', () => { if (img.src) window.open(img.src, '_blank', 'noopener'); });
+      const cap = modEl('figcaption', '', (ph.note ? ph.note + ' · ' : '') + new Date(ph.created_at).toLocaleDateString());
+      const del = modEl('button', 'mod-btn danger', 'Borrar'); del.type = 'button';
+      del.addEventListener('click', async () => {
+        if (!confirm('¿Borrar esta foto? No se puede deshacer.')) return;
+        const d = await modApi('/api/corporal/progress-photos/' + ph.id, { method: 'DELETE' });
+        if (d.ok) load(); else msg.textContent = 'No se pudo borrar.';
+      });
+      fig.append(img, cap, del);
+      grid.appendChild(fig);
+      fetch(`${API}/api/corporal/progress-photos/${ph.id}`, { credentials: 'include' })
+        .then(x => x.ok ? x.blob() : Promise.reject(new Error('HTTP ' + x.status)))
+        .then(b => { const u = URL.createObjectURL(b); CORP_URLS.push(u); img.src = u; })
+        .catch(() => { img.alt = 'No se pudo cargar'; });
+    }
+  }
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    if (!file.files[0]) return;
+    const fd = new FormData(); fd.append('photo', file.files[0]); fd.append('note', note.value);
+    add.disabled = true; msg.textContent = 'Subiendo…';
+    const r = await modApi('/api/corporal/progress-photos', { method: 'POST', body: fd });
+    add.disabled = false;
+    if (r.ok) { msg.textContent = 'Foto guardada.'; form.reset(); load(); return; }
+    msg.textContent = r.status === 413 ? 'La imagen pesa más de 5 MB.' : r.status === 429 ? 'Demasiados intentos. Espera un rato.' : ((r.data && r.data.message) || 'No se pudo subir.');
+  });
+  load();
+}
+
 async function modDelete(name) {
   if (!window.confirm(`¿Borrar TODOS los datos que ${name} guardó de ti? No se puede deshacer.`)) return;
   modMsg('Borrando…');
@@ -2973,12 +3092,51 @@ async function modDelete(name) {
   modMsg(`Se borraron ${res.data && Number.isFinite(res.data.deleted) ? res.data.deleted : 0} registro(s) de ${name}.`);
 }
 
+// ==================== COMANDOS «/» (solo desarrollador) ====================
+// Al escribir «/» aparece el selector de módulos; al elegir uno se escribe /[Módulo] y sigue tu mensaje.
+// Formato: /[Corporal Verified] hueso púbico 15.2   (de dónde sale la medida + los cm).
+// La interfaz solo ayuda: el servidor vuelve a comprobar que eres desarrollador y que el módulo te permite entrar.
+const SLASH = { menu: null };
+
+function slashHide() { if (SLASH.menu) SLASH.menu.hidden = true; }
+
+function slashShow() {
+  const inp = $('chatInput');
+  const v = inp.value;
+  if (!ACCT.developer || !v.startsWith('/') || v.includes(']')) { slashHide(); return; }
+  if (!SLASH.menu) {
+    SLASH.menu = modEl('div', 'slash-menu');
+    SLASH.menu.setAttribute('role', 'listbox');
+    SLASH.menu.setAttribute('aria-label', 'Módulos para el comando /');
+    inp.parentNode.style.position = 'relative';
+    inp.parentNode.appendChild(SLASH.menu);
+  }
+  const q = v.slice(1).replace(/^\[/, '').trim().toLowerCase();
+  const names = Object.keys(MOD_THEME).filter(n => n.toLowerCase().includes(q));
+  SLASH.menu.textContent = '';
+  if (!names.length) { slashHide(); return; }
+  for (const n of names) {
+    const b = modEl('button', 'slash-item');
+    b.type = 'button';
+    b.setAttribute('role', 'option');
+    b.append(modEl('span', 'ico', (MOD_THEME[n] && MOD_THEME[n].ico) || '▦'), modEl('span', '', ' /[' + n + ']'));
+    b.style.setProperty('--mc', (MOD_THEME[n] && MOD_THEME[n].c) || '#00c8ff');
+    b.addEventListener('mousedown', e => e.preventDefault());
+    b.addEventListener('click', () => { inp.value = '/[' + n + '] '; slashHide(); inp.focus(); });
+    SLASH.menu.appendChild(b);
+  }
+  SLASH.menu.hidden = false;
+}
+
 // ==================== EVENTS ====================
 $('sendBtn').addEventListener('click', send);
+$('chatInput').addEventListener('input', slashShow);
+$('chatInput').addEventListener('blur', () => setTimeout(slashHide, 150));
 $('modBtn').addEventListener('click', modOpen);
 $('modClose').addEventListener('click', modClose);
 $('chatInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  if (e.key === 'Escape') { slashHide(); return; }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); slashHide(); send(); }
 });
 setupVoiceToggle();
 coreInit();
@@ -2993,7 +3151,7 @@ initVoices();
 // TERMS_VERSION de src/core/auth/accounts.py y con la fecha de las páginas legales;
 // si no, el servidor rechaza el registro y pide recargar.
 const TERMS_VERSION = '2026-10-15';
-const ACCT = { me: null, view: 'login', busy: false, lockClose: false, opener: null };
+const ACCT = { me: null, developer: false, view: 'login', busy: false, lockClose: false, opener: null };
 const AGE_LABELS = {
   minor: 'Menor (13–14 años)',
   minor_basic: 'Menor (15–17 años)',
@@ -3093,6 +3251,7 @@ function fillProfile() {
 async function refreshAccount() {
   const r = await acctApi('GET', '/api/account/me');
   ACCT.me = (r.ok && r.data.logged_in) ? r.data.profile : null;
+  ACCT.developer = !!(ACCT.me && r.data.developer === true);   // solo habilita el selector «/»; el servidor decide de verdad
   renderAccountButton();
   return ACCT.me;
 }

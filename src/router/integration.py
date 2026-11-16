@@ -42,6 +42,7 @@ def route_or_none(
     session_id: str,
     age_band: str = "",
     data_store: Optional[Any] = None,
+    verification: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Intenta enrutar el mensaje a un modulo especializado.
@@ -62,9 +63,43 @@ def route_or_none(
         session_id=session_id,
         age_band=age_band,
         data_store=data_store,
+        verification=verification,
     )
     result = _router.route(user_message, context)
+    return _result_to_dict(result)
 
+
+def route_forced(
+    module_name: str,
+    user_message: str,
+    *,
+    user_id: str,
+    consciousness_level: float,
+    session_id: str,
+    age_band: str = "",
+    data_store: Optional[Any] = None,
+    verification: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Entrega el mensaje a un módulo concreto (comandos «/»). Mismos gates de edad y autorización que
+    route_or_none. Siempre devuelve un dict."""
+    context = OmniaContext(
+        user_id=user_id,
+        consciousness_level=consciousness_level,
+        session_id=session_id,
+        age_band=age_band,
+        data_store=data_store,
+        verification=verification,
+    )
+    result = _router.route_to(module_name, user_message, context)
+    out = _result_to_dict(result)
+    if out is None:        # módulo inexistente
+        return {"response": f"No existe el módulo «{module_name}».", "module": None, "data": None,
+                "auth_required": False, "age_restricted": False}
+    return out
+
+
+def _result_to_dict(result) -> Optional[Dict[str, Any]]:
+    """Convierte un RoutingResult en el dict que usa el motor (None = ningún módulo aplica)."""
     # Caso 0: el modulo ganador no esta permitido para este rango de edad.
     if result.age_restricted_module:
         return {
